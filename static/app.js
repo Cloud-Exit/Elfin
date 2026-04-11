@@ -26,8 +26,10 @@ async function checkHealth() {
     const data = await res.json()
     state.serverStatus = data.status === 'healthy' ? 'ok'
       : data.status === 'degraded' ? 'degraded' : 'err'
+    state.services = data
   } catch {
     state.serverStatus = 'err'
+    state.services = {}
   }
 }
 checkHealth()

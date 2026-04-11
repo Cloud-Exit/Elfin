@@ -1,11 +1,11 @@
 """
 Faraday-OS ingestion pipeline.
 
-Reads PDFs/MDs/TXTs from datasets/raw, chunks them, embeds via Ollama,
-and stores vectors in ChromaDB. Idempotent — skips already-indexed documents.
+Reads PDFs/MDs/TXTs from datasets/raw, chunks them, embeds via llama-server
+(OpenAI-compatible), and stores vectors in Qdrant. Idempotent via SHA256 hash.
 
 Usage:
-    python pipeline.py [--force] [--source-dir DIR] [--chroma-url URL] [--ollama-url URL]
+    python pipeline.py [--force] [--source-dir DIR] [--qdrant-url URL] [--embed-url URL]
 """
 
 import argparse
@@ -16,9 +16,10 @@ from pathlib import Path
 
 from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.ollama import OllamaEmbedding
-from llama_index.vector_stores.chroma import ChromaVectorStore
-import chromadb
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PayloadSchemaType
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,12 +29,13 @@ logging.basicConfig(
 log = logging.getLogger("faraday-ingest")
 
 DEFAULT_SOURCE_DIR = "./datasets/raw"
-DEFAULT_CHROMA_URL = "http://localhost:8000"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_QDRANT_URL = "http://localhost:6333"
+DEFAULT_EMBED_URL = "http://localhost:8082"
 COLLECTION_NAME = "faraday_docs"
 CHUNK_SIZE = 1024
 CHUNK_OVERLAP = 200
 EMBED_MODEL = "nomic-embed-text"
+EMBED_DIM = 768
 
 
 def file_hash(path: Path) -> str:
@@ -44,29 +46,63 @@ def file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def get_indexed_hashes(collection) -> set:
+def get_indexed_hashes(client: QdrantClient, collection: str) -> set:
     """Retrieve all document hashes already in the collection."""
     try:
-        results = collection.get(include=["metadatas"])
         hashes = set()
-        for meta in results.get("metadatas", []):
-            if meta and "file_hash" in meta:
-                hashes.add(meta["file_hash"])
+        offset = None
+        while True:
+            result = client.scroll(
+                collection_name=collection,
+                limit=100,
+                offset=offset,
+                with_payload=["file_hash"],
+            )
+            points, next_offset = result
+            for point in points:
+                if point.payload and "file_hash" in point.payload:
+                    hashes.add(point.payload["file_hash"])
+            if next_offset is None:
+                break
+            offset = next_offset
         return hashes
     except Exception:
         return set()
 
 
+def ensure_collection(client: QdrantClient, collection: str, dim: int):
+    """Create the Qdrant collection if it doesn't exist, with on-disk storage."""
+    collections = [c.name for c in client.get_collections().collections]
+    if collection in collections:
+        log.info("Collection '%s' already exists", collection)
+        return
+
+    log.info("Creating collection '%s' (dim=%d, on_disk=true)", collection, dim)
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=VectorParams(
+            size=dim,
+            distance=Distance.COSINE,
+            on_disk=True,
+        ),
+    )
+    # Index the file_hash field for efficient dedup lookups
+    client.create_payload_index(
+        collection_name=collection,
+        field_name="file_hash",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
+
+
 def discover_documents(source_dir: Path) -> list[Path]:
     exts = {".pdf", ".md", ".txt"}
-    docs = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in exts)
-    return docs
+    return sorted(p for p in source_dir.iterdir() if p.suffix.lower() in exts)
 
 
 def run_pipeline(
     source_dir: str,
-    chroma_url: str,
-    ollama_url: str,
+    qdrant_url: str,
+    embed_url: str,
     force: bool = False,
 ):
     source_path = Path(source_dir)
@@ -81,17 +117,16 @@ def run_pipeline(
 
     log.info("Found %d documents in %s", len(all_docs), source_dir)
 
-    # Connect to ChromaDB
-    chroma_client = chromadb.HttpClient(host=chroma_url.split("://")[-1].split(":")[0],
-                                         port=int(chroma_url.split(":")[-1]))
-    collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
+    # Connect to Qdrant
+    client = QdrantClient(url=qdrant_url)
+    ensure_collection(client, COLLECTION_NAME, EMBED_DIM)
 
     # Check which documents are already indexed
     if force:
         log.info("Force mode: re-indexing all documents")
         docs_to_index = all_docs
     else:
-        indexed_hashes = get_indexed_hashes(collection)
+        indexed_hashes = get_indexed_hashes(client, COLLECTION_NAME)
         docs_to_index = []
         for doc_path in all_docs:
             h = file_hash(doc_path)
@@ -106,14 +141,18 @@ def run_pipeline(
 
     log.info("Indexing %d new documents", len(docs_to_index))
 
-    # Set up embedding model
-    embed_model = OllamaEmbedding(
+    # Set up embedding model (OpenAI-compatible, pointing at llama-embed)
+    embed_model = OpenAIEmbedding(
+        api_base=embed_url + "/v1",
+        api_key="not-needed",
         model_name=EMBED_MODEL,
-        base_url=ollama_url,
     )
 
-    # Set up vector store
-    vector_store = ChromaVectorStore(chroma_collection=collection)
+    # Set up Qdrant vector store via LlamaIndex
+    vector_store = QdrantVectorStore(
+        client=client,
+        collection_name=COLLECTION_NAME,
+    )
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
     # Process each document
@@ -156,15 +195,15 @@ def run_pipeline(
 def main():
     parser = argparse.ArgumentParser(description="Faraday-OS document ingestion pipeline")
     parser.add_argument("--source-dir", default=DEFAULT_SOURCE_DIR, help="Directory with source documents")
-    parser.add_argument("--chroma-url", default=DEFAULT_CHROMA_URL, help="ChromaDB HTTP URL")
-    parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL, help="Ollama API URL")
+    parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT_URL, help="Qdrant HTTP URL")
+    parser.add_argument("--embed-url", default=DEFAULT_EMBED_URL, help="Embedding server URL (OpenAI-compatible)")
     parser.add_argument("--force", action="store_true", help="Re-index all documents")
     args = parser.parse_args()
 
     run_pipeline(
         source_dir=args.source_dir,
-        chroma_url=args.chroma_url,
-        ollama_url=args.ollama_url,
+        qdrant_url=args.qdrant_url,
+        embed_url=args.embed_url,
         force=args.force,
     )
 

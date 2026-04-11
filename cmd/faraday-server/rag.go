@@ -16,141 +16,122 @@ type Source struct {
 	Page       string `json:"page,omitempty"`
 }
 
-// OllamaEmbedRequest is the payload for Ollama's /api/embed endpoint.
-type OllamaEmbedRequest struct {
+// --- OpenAI-compatible embeddings (llama.cpp /v1/embeddings) ---
+
+// EmbedRequest is the payload for the OpenAI-compatible embeddings endpoint.
+type EmbedRequest struct {
 	Model string `json:"model"`
 	Input string `json:"input"`
 }
 
-// OllamaEmbedResponse is the response from Ollama's /api/embed endpoint.
-type OllamaEmbedResponse struct {
-	Embeddings [][]float64 `json:"embeddings"`
+// EmbedResponse is the response from the OpenAI-compatible embeddings endpoint.
+type EmbedResponse struct {
+	Data []struct {
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
 }
 
-// embedQuery calls Ollama to get an embedding vector for the query.
-func embedQuery(ollamaURL, model, query string) ([]float64, error) {
-	req := OllamaEmbedRequest{Model: model, Input: query}
+// embedQuery calls the embedding server's OpenAI-compatible endpoint.
+func embedQuery(embedURL, model, query string) ([]float64, error) {
+	req := EmbedRequest{Model: model, Input: query}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	resp, err := http.Post(ollamaURL+"/api/embed", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(embedURL+"/v1/embeddings", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("ollama embed request: %w", err)
+		return nil, fmt.Errorf("embed request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama embed status %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("embed status %d: %s", resp.StatusCode, string(b))
 	}
 
-	var embedResp OllamaEmbedResponse
+	var embedResp EmbedResponse
 	if err := json.NewDecoder(resp.Body).Decode(&embedResp); err != nil {
 		return nil, fmt.Errorf("decode embed response: %w", err)
 	}
 
-	if len(embedResp.Embeddings) == 0 {
+	if len(embedResp.Data) == 0 {
 		return nil, fmt.Errorf("no embeddings returned")
 	}
-	return embedResp.Embeddings[0], nil
+	return embedResp.Data[0].Embedding, nil
 }
 
-// ChromaQueryRequest is the payload for ChromaDB's collection query endpoint.
-type ChromaQueryRequest struct {
-	QueryEmbeddings [][]float64 `json:"query_embeddings"`
-	NResults        int         `json:"n_results"`
-	Include         []string    `json:"include"`
+// --- Qdrant vector search ---
+
+// QdrantSearchRequest is the payload for Qdrant's search endpoint.
+type QdrantSearchRequest struct {
+	Vector      []float64 `json:"vector"`
+	Limit       int       `json:"limit"`
+	WithPayload bool      `json:"with_payload"`
 }
 
-// ChromaQueryResponse is the response from ChromaDB's query endpoint.
-type ChromaQueryResponse struct {
-	Documents [][]string            `json:"documents"`
-	Metadatas [][]map[string]any    `json:"metadatas"`
-	Distances [][]float64           `json:"distances"`
+// QdrantSearchResponse is the response from Qdrant's search endpoint.
+type QdrantSearchResponse struct {
+	Result []QdrantPoint `json:"result"`
 }
 
-// ChromaCollection represents a ChromaDB collection.
-type ChromaCollection struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+// QdrantPoint is a single search result from Qdrant.
+type QdrantPoint struct {
+	ID      any            `json:"id"`
+	Score   float64        `json:"score"`
+	Payload map[string]any `json:"payload"`
 }
 
-// getCollectionID looks up the ChromaDB collection ID by name.
-func getCollectionID(chromaURL, name string) (string, error) {
-	url := chromaURL + "/api/v1/collections?limit=100"
-	resp, err := http.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("chroma list collections: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var collections []ChromaCollection
-	if err := json.NewDecoder(resp.Body).Decode(&collections); err != nil {
-		return "", fmt.Errorf("decode collections: %w", err)
-	}
-
-	for _, c := range collections {
-		if c.Name == name {
-			return c.ID, nil
-		}
-	}
-	return "", fmt.Errorf("collection %q not found", name)
-}
-
-// queryChromaDB retrieves the top-k nearest chunks for a query embedding.
-func queryChromaDB(chromaURL, collectionID string, embedding []float64, topK int) ([]Source, error) {
-	req := ChromaQueryRequest{
-		QueryEmbeddings: [][]float64{embedding},
-		NResults:        topK,
-		Include:         []string{"documents", "metadatas", "distances"},
+// queryQdrant retrieves the top-k nearest chunks from Qdrant.
+func queryQdrant(qdrantURL, collection string, embedding []float64, topK int) ([]Source, error) {
+	req := QdrantSearchRequest{
+		Vector:      embedding,
+		Limit:       topK,
+		WithPayload: true,
 	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal chroma query: %w", err)
+		return nil, fmt.Errorf("marshal qdrant search: %w", err)
 	}
 
-	url := chromaURL + "/api/v1/collections/" + collectionID + "/query"
+	url := qdrantURL + "/collections/" + collection + "/points/search"
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("chroma query: %w", err)
+		return nil, fmt.Errorf("qdrant search: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("chroma query status %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("qdrant search status %d: %s", resp.StatusCode, string(b))
 	}
 
-	var chromaResp ChromaQueryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chromaResp); err != nil {
-		return nil, fmt.Errorf("decode chroma response: %w", err)
-	}
-
-	if len(chromaResp.Documents) == 0 || len(chromaResp.Documents[0]) == 0 {
-		return nil, nil
+	var searchResp QdrantSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+		return nil, fmt.Errorf("decode qdrant response: %w", err)
 	}
 
 	var sources []Source
-	docs := chromaResp.Documents[0]
-	metas := chromaResp.Metadatas[0]
-
-	for i, doc := range docs {
-		s := Source{Text: doc}
-		if i < len(metas) && metas[i] != nil {
-			if sf, ok := metas[i]["source_file"].(string); ok {
-				s.SourceFile = sf
-			}
-			if pg, ok := metas[i]["page_label"].(string); ok {
-				s.Page = pg
-			}
+	for _, point := range searchResp.Result {
+		s := Source{}
+		if text, ok := point.Payload["text"].(string); ok {
+			s.Text = text
 		}
-		sources = append(sources, s)
+		if sf, ok := point.Payload["source_file"].(string); ok {
+			s.SourceFile = sf
+		}
+		if pg, ok := point.Payload["page_label"].(string); ok {
+			s.Page = pg
+		}
+		if s.Text != "" {
+			sources = append(sources, s)
+		}
 	}
 	return sources, nil
 }
+
+// --- Prompt building ---
 
 // buildRAGPrompt constructs a prompt with retrieved context for Reference Mode.
 func buildRAGPrompt(query string, sources []Source) []OllamaMessage {

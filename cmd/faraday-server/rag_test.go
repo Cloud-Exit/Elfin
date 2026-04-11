@@ -11,12 +11,14 @@ import (
 
 func TestEmbedQuery_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/embed" {
+		if r.URL.Path != "/v1/embeddings" {
 			http.Error(w, "not found", 404)
 			return
 		}
-		resp := OllamaEmbedResponse{
-			Embeddings: [][]float64{{0.1, 0.2, 0.3}},
+		resp := EmbedResponse{
+			Data: []struct {
+				Embedding []float64 `json:"embedding"`
+			}{{Embedding: []float64{0.1, 0.2, 0.3}}},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -35,7 +37,7 @@ func TestEmbedQuery_Success(t *testing.T) {
 func TestEmbedQuery_EmptyResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"embeddings":[]}`))
+		_, _ = w.Write([]byte(`{"data":[]}`))
 	}))
 	defer srv.Close()
 
@@ -45,57 +47,36 @@ func TestEmbedQuery_EmptyResponse(t *testing.T) {
 	}
 }
 
-func TestGetCollectionID_Found(t *testing.T) {
+func TestQueryQdrant_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		collections := []ChromaCollection{
-			{ID: "abc-123", Name: "faraday_docs"},
-			{ID: "def-456", Name: "other"},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(collections)
-	}))
-	defer srv.Close()
-
-	id, err := getCollectionID(srv.URL, "faraday_docs")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if id != "abc-123" {
-		t.Errorf("expected abc-123, got %s", id)
-	}
-}
-
-func TestGetCollectionID_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	defer srv.Close()
-
-	_, err := getCollectionID(srv.URL, "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for missing collection")
-	}
-}
-
-func TestQueryChromaDB_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		resp := ChromaQueryResponse{
-			Documents: [][]string{{"Water purification methods include boiling.", "Solar stills work by evaporation."}},
-			Metadatas: [][]map[string]any{
+		resp := QdrantSearchResponse{
+			Result: []QdrantPoint{
 				{
-					{"source_file": "FM 3-05.70", "page_label": "42"},
-					{"source_file": "FM 3-05.70", "page_label": "45"},
+					ID:    1,
+					Score: 0.95,
+					Payload: map[string]any{
+						"text":        "Water purification methods include boiling.",
+						"source_file": "FM 3-05.70",
+						"page_label":  "42",
+					},
+				},
+				{
+					ID:    2,
+					Score: 0.88,
+					Payload: map[string]any{
+						"text":        "Solar stills work by evaporation.",
+						"source_file": "FM 3-05.70",
+						"page_label":  "45",
+					},
 				},
 			},
-			Distances: [][]float64{{0.1, 0.2}},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
-	sources, err := queryChromaDB(srv.URL, "test-id", []float64{0.1, 0.2}, 5)
+	sources, err := queryQdrant(srv.URL, "test-collection", []float64{0.1, 0.2}, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,14 +91,14 @@ func TestQueryChromaDB_Success(t *testing.T) {
 	}
 }
 
-func TestQueryChromaDB_Empty(t *testing.T) {
+func TestQueryQdrant_Empty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"documents":[[]],"metadatas":[[]],"distances":[[]]}`))
+		_, _ = w.Write([]byte(`{"result":[]}`))
 	}))
 	defer srv.Close()
 
-	sources, err := queryChromaDB(srv.URL, "test-id", []float64{0.1}, 5)
+	sources, err := queryQdrant(srv.URL, "test-collection", []float64{0.1}, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,46 +108,51 @@ func TestQueryChromaDB_Empty(t *testing.T) {
 }
 
 func TestFullRAGChatFlow(t *testing.T) {
-	// Mock Ollama: serves both /api/embed and /api/chat
-	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/embed":
-			resp := OllamaEmbedResponse{Embeddings: [][]float64{{0.1, 0.2, 0.3}}}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		case "/api/chat":
-			w.Header().Set("Content-Type", "application/x-ndjson")
-			// Stream two tokens then done
-			for _, token := range []string{"Water ", "purification."} {
-				chunk := fmt.Sprintf(`{"message":{"content":"%s"},"done":false}`, token)
-				_, _ = fmt.Fprintln(w, chunk)
-			}
-			_, _ = fmt.Fprintln(w, `{"message":{"content":""},"done":true}`)
-		default:
-			http.Error(w, "not found", 404)
+	// Mock llama-embed (OpenAI-compatible embeddings)
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := EmbedResponse{
+			Data: []struct {
+				Embedding []float64 `json:"embedding"`
+			}{{Embedding: []float64{0.1, 0.2, 0.3}}},
 		}
-	}))
-	defer ollama.Close()
-
-	// Mock ChromaDB: serves collection list and query
-	chroma := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if strings.HasPrefix(r.URL.Path, "/api/v1/collections") && r.Method == "GET" {
-			_ = json.NewEncoder(w).Encode([]ChromaCollection{{ID: "test-id", Name: "faraday_docs"}})
-		} else if strings.Contains(r.URL.Path, "/query") {
-			resp := ChromaQueryResponse{
-				Documents: [][]string{{"Boil water for 1 minute to purify."}},
-				Metadatas: [][]map[string]any{{{"source_file": "FM 3-05.70", "page_label": "42"}}},
-				Distances: [][]float64{{0.05}},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		}
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
-	defer chroma.Close()
+	defer embedSrv.Close()
+
+	// Mock Qdrant
+	qdrantSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := QdrantSearchResponse{
+			Result: []QdrantPoint{{
+				ID:    1,
+				Score: 0.95,
+				Payload: map[string]any{
+					"text":        "Boil water for 1 minute to purify.",
+					"source_file": "FM 3-05.70",
+					"page_label":  "42",
+				},
+			}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer qdrantSrv.Close()
+
+	// Mock llama-server (OpenAI-compatible chat with SSE streaming)
+	llamaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, token := range []string{"Water ", "purification."} {
+			chunk := fmt.Sprintf(`{"choices":[{"delta":{"content":"%s"}}]}`, token)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer llamaSrv.Close()
 
 	cfg := Config{
-		OllamaURL:  ollama.URL,
-		ChromaURL:  chroma.URL,
+		LlamaURL:   llamaSrv.URL,
+		EmbedURL:   embedSrv.URL,
+		QdrantURL:  qdrantSrv.URL,
 		Model:      "test",
 		EmbedModel: "test",
 		Collection: "faraday_docs",
@@ -179,7 +165,7 @@ func TestFullRAGChatFlow(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n")
 	if len(lines) < 4 {
-		t.Fatalf("expected at least 4 NDJSON lines (sources + 2 tokens + done), got %d: %s", len(lines), w.Body.String())
+		t.Fatalf("expected at least 4 NDJSON lines, got %d: %s", len(lines), w.Body.String())
 	}
 
 	// Line 0: sources

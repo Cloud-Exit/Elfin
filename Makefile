@@ -1,13 +1,26 @@
-.PHONY: dev server build test lint clean build-arm64 ingest setup
+.PHONY: dev server build test lint clean build-arm64 ingest ingest-force setup
 
-# Start full dev stack: Ollama + ChromaDB (Docker) + faraday-server (native)
+# Start full dev stack: llama-server + llama-embed + Qdrant (Docker) + faraday-server (native)
 dev: build
 	@echo "Starting services..."
-	docker compose up -d ollama chromadb
-	@echo "Waiting for Ollama..."
-	@until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do sleep 1; done
-	@echo "Waiting for ChromaDB..."
-	@until curl -sf http://localhost:8000/api/v1/heartbeat > /dev/null 2>&1; do sleep 1; done
+	docker compose up -d llama-server llama-embed qdrant
+	@echo "Waiting for llama-server..."
+	@until curl -sf http://localhost:8081/health > /dev/null 2>&1; do sleep 1; done
+	@echo "Waiting for llama-embed..."
+	@until curl -sf http://localhost:8082/health > /dev/null 2>&1; do sleep 1; done
+	@echo "Waiting for Qdrant..."
+	@until curl -sf http://localhost:6333/healthz > /dev/null 2>&1; do sleep 1; done
+	@echo "Starting faraday-server on :8080"
+	./faraday-server
+
+# Start with Open WebUI too
+dev-full: build
+	docker compose up -d
+	@echo "Waiting for services..."
+	@until curl -sf http://localhost:8081/health > /dev/null 2>&1; do sleep 1; done
+	@until curl -sf http://localhost:8082/health > /dev/null 2>&1; do sleep 1; done
+	@until curl -sf http://localhost:6333/healthz > /dev/null 2>&1; do sleep 1; done
+	@echo "Open WebUI at http://localhost:3000"
 	@echo "Starting faraday-server on :8080"
 	./faraday-server
 
@@ -19,7 +32,7 @@ build:
 server: build
 	./faraday-server
 
-# Run ingestion pipeline (requires Ollama + ChromaDB running)
+# Run ingestion pipeline (requires llama-embed + Qdrant running)
 ingest:
 	python3 src/ingestion/pipeline.py
 
@@ -27,13 +40,9 @@ ingest:
 ingest-force:
 	python3 src/ingestion/pipeline.py --force
 
-# First-time setup: install Python deps, pull models
+# First-time setup: install Python deps
 setup:
 	pip install -r requirements.txt
-	docker compose up -d ollama
-	@until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do sleep 1; done
-	docker compose exec ollama ollama pull nomic-embed-text
-	docker compose exec ollama ollama pull gemma3:4b
 
 # Run tests
 test:

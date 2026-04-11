@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -16,21 +18,23 @@ import (
 // Config holds server configuration loaded from environment variables.
 type Config struct {
 	Port       string
-	OllamaURL  string
-	ChromaURL  string
+	LlamaURL   string // llama-server (chat) OpenAI-compatible base URL
+	EmbedURL   string // llama-embed (embeddings) OpenAI-compatible base URL
+	QdrantURL  string
 	StaticDir  string
-	Model      string
-	EmbedModel string
-	Collection string
+	Model      string // model name for chat completions
+	EmbedModel string // model name for embeddings
+	Collection string // Qdrant collection name
 }
 
 func loadConfig() Config {
 	return Config{
 		Port:       envOr("FARADAY_PORT", "8080"),
-		OllamaURL:  envOr("OLLAMA_URL", "http://localhost:11434"),
-		ChromaURL:  envOr("CHROMA_URL", "http://localhost:8000"),
+		LlamaURL:   envOr("LLAMA_URL", "http://localhost:8081"),
+		EmbedURL:   envOr("EMBED_URL", "http://localhost:8082"),
+		QdrantURL:  envOr("QDRANT_URL", "http://localhost:6333"),
 		StaticDir:  envOr("STATIC_DIR", "./static"),
-		Model:      envOr("FARADAY_MODEL", "gemma3:4b"),
+		Model:      envOr("FARADAY_MODEL", "gemma-4-e4b"),
 		EmbedModel: envOr("FARADAY_EMBED_MODEL", "nomic-embed-text"),
 		Collection: envOr("FARADAY_COLLECTION", "faraday_docs"),
 	}
@@ -104,25 +108,27 @@ type StreamMessage struct {
 	Error   string   `json:"error,omitempty"`
 }
 
-// OllamaChatRequest is what we forward to Ollama's /api/chat.
-type OllamaChatRequest struct {
-	Model    string          `json:"model"`
-	Messages []OllamaMessage `json:"messages"`
-	Stream   bool            `json:"stream"`
-}
-
-// OllamaMessage represents a single chat message.
+// OllamaMessage is used for building message arrays (OpenAI chat format).
 type OllamaMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-// OllamaChatChunk is a single streamed chunk from Ollama.
-type OllamaChatChunk struct {
-	Message struct {
-		Content string `json:"content"`
-	} `json:"message"`
-	Done bool `json:"done"`
+// OpenAIChatRequest is the payload for the OpenAI-compatible /v1/chat/completions.
+type OpenAIChatRequest struct {
+	Model    string          `json:"model"`
+	Messages []OllamaMessage `json:"messages"`
+	Stream   bool            `json:"stream"`
+}
+
+// OpenAIChatChunk is a single SSE chunk from the streaming response.
+type OpenAIChatChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
 }
 
 func chatHandler(cfg Config) http.HandlerFunc {
@@ -143,43 +149,51 @@ func chatHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
-		// Try RAG: embed → ChromaDB → build prompt with sources
+		// RAG orchestration: embed → Qdrant → build prompt
 		messages, sources := ragOrFallback(cfg, req.Message)
-
-		// Send sources first (may be empty if RAG failed)
 		writeStreamLine(w, flusher, StreamMessage{Type: "sources", Sources: sources})
 
-		// Build Ollama request
-		ollamaReq := OllamaChatRequest{
+		// Call llama-server via OpenAI-compatible API
+		chatReq := OpenAIChatRequest{
 			Model:    cfg.Model,
 			Messages: messages,
 			Stream:   true,
 		}
-		body, err := json.Marshal(ollamaReq)
+		body, err := json.Marshal(chatReq)
 		if err != nil {
 			writeStreamLine(w, flusher, StreamMessage{Type: "error", Error: "marshal error"})
 			return
 		}
 
-		resp, err := http.Post(cfg.OllamaURL+"/api/chat", "application/json", bytes.NewReader(body))
+		resp, err := http.Post(cfg.LlamaURL+"/v1/chat/completions", "application/json", bytes.NewReader(body))
 		if err != nil {
-			writeStreamLine(w, flusher, StreamMessage{Type: "error", Error: fmt.Sprintf("ollama unreachable: %s", err.Error())})
+			writeStreamLine(w, flusher, StreamMessage{Type: "error", Error: fmt.Sprintf("llama-server unreachable: %s", err.Error())})
 			return
 		}
 		defer func() { _ = resp.Body.Close() }()
 
-		// Stream tokens from Ollama
-		decoder := json.NewDecoder(resp.Body)
-		for decoder.More() {
-			var chunk OllamaChatChunk
-			if err := decoder.Decode(&chunk); err != nil {
+		// Parse SSE stream from llama-server
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// SSE format: "data: {...}" or "data: [DONE]"
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
 				break
 			}
-			if chunk.Message.Content != "" {
-				writeStreamLine(w, flusher, StreamMessage{Type: "token", Content: chunk.Message.Content})
+
+			var chunk OpenAIChatChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
 			}
-			if chunk.Done {
-				break
+			for _, choice := range chunk.Choices {
+				if choice.Delta.Content != "" {
+					writeStreamLine(w, flusher, StreamMessage{Type: "token", Content: choice.Delta.Content})
+				}
 			}
 		}
 
@@ -189,22 +203,13 @@ func chatHandler(cfg Config) http.HandlerFunc {
 
 // ragOrFallback attempts RAG orchestration. If any step fails, falls back to direct chat.
 func ragOrFallback(cfg Config, query string) ([]OllamaMessage, []Source) {
-	// Step 1: embed the query
-	embedding, err := embedQuery(cfg.OllamaURL, cfg.EmbedModel, query)
+	embedding, err := embedQuery(cfg.EmbedURL, cfg.EmbedModel, query)
 	if err != nil {
 		log.Printf("RAG embed failed (falling back to direct): %v", err)
 		return buildDirectPrompt(query), nil
 	}
 
-	// Step 2: find the collection
-	collectionID, err := getCollectionID(cfg.ChromaURL, cfg.Collection)
-	if err != nil {
-		log.Printf("RAG collection lookup failed (falling back to direct): %v", err)
-		return buildDirectPrompt(query), nil
-	}
-
-	// Step 3: query ChromaDB
-	sources, err := queryChromaDB(cfg.ChromaURL, collectionID, embedding, 5)
+	sources, err := queryQdrant(cfg.QdrantURL, cfg.Collection, embedding, 5)
 	if err != nil {
 		log.Printf("RAG query failed (falling back to direct): %v", err)
 		return buildDirectPrompt(query), nil
@@ -233,36 +238,41 @@ func healthHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		client := &http.Client{Timeout: 2 * time.Second}
 
-		ollamaOK := "connected"
-		resp, err := client.Get(cfg.OllamaURL + "/api/tags")
+		llamaOK := "connected"
+		resp, err := client.Get(cfg.LlamaURL + "/health")
 		if err != nil {
-			ollamaOK = "unreachable"
+			llamaOK = "unreachable"
 		} else {
 			_ = resp.Body.Close()
 		}
 
-		chromaOK := "connected"
-		resp, err = client.Get(cfg.ChromaURL + "/api/v1/heartbeat")
+		embedOK := "connected"
+		resp, err = client.Get(cfg.EmbedURL + "/health")
 		if err != nil {
-			chromaOK = "unreachable"
+			embedOK = "unreachable"
+		} else {
+			_ = resp.Body.Close()
+		}
+
+		qdrantOK := "connected"
+		resp, err = client.Get(cfg.QdrantURL + "/healthz")
+		if err != nil {
+			qdrantOK = "unreachable"
 		} else {
 			_ = resp.Body.Close()
 		}
 
 		status := "healthy"
-		code := http.StatusOK
-		if ollamaOK != "connected" || chromaOK != "connected" {
+		if llamaOK != "connected" || embedOK != "connected" || qdrantOK != "connected" {
 			status = "degraded"
-			code = http.StatusOK // still 200 — degraded is informational
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-
 		result := map[string]string{
-			"status":   status,
-			"ollama":   ollamaOK,
-			"chromadb": chromaOK,
+			"status":    status,
+			"llama":     llamaOK,
+			"embedding": embedOK,
+			"qdrant":    qdrantOK,
 		}
 		_ = json.NewEncoder(w).Encode(result)
 	}

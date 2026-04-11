@@ -1,6 +1,7 @@
 # Data directories (large files, user content)
-data/ollama/*
-data/chromadb/*
+data/models/*
+data/qdrant/*
+data/open-webui/*
 data/media/movies/*
 data/media/music/*
 data/media/books/*

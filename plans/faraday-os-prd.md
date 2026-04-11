@@ -88,13 +88,13 @@ Solar input (~40-60W in good sun) can sustain active use during daylight. System
 │  │  Reverse proxy to all backend services             │    │
 │  └──────────────────────────────────────────────────┘    │
 │                                                           │
-│  ┌────────────┐  ┌──────────┐  ┌──────────────────┐     │
-│  │  Ollama     │  │ ChromaDB │  │  Kiwix-serve     │     │
-│  │  - Gemma 4  │  │          │  │  - Wiki EN/ES    │     │
-│  │    E4B      │  │          │  │  - WikiMed       │     │
-│  │  - nomic-   │  │          │  │  - StackExchange │     │
-│  │    embed    │  │          │  │                    │     │
-│  └────────────┘  └──────────┘  └──────────────────┘     │
+│  ┌──────────────┐  ┌────────┐  ┌──────────────────┐     │
+│  │ llama-server  │  │ Qdrant │  │  Kiwix-serve     │     │
+│  │ (Gemma 4 E4B) │  │(on-disk│  │  - Wiki EN/ES    │     │
+│  │               │  │storage)│  │  - WikiMed       │     │
+│  │ llama-embed   │  │        │  │  - StackExchange │     │
+│  │ (nomic-embed) │  │        │  │                    │     │
+│  └──────────────┘  └────────┘  └──────────────────┘     │
 │                                                           │
 │  ┌──────────────────┐                                    │
 │  │  Tile Server      │                                    │
@@ -110,13 +110,15 @@ Solar input (~40-60W in good sun) can sustain active use during daylight. System
 | Service | Runtime | Port | RAM Budget | Persistent Data |
 |---------|---------|------|-----------|----------------|
 | **faraday-server** | Go binary | 8080 | ~50 MB | SPA assets, config |
-| **Ollama** | Container or binary | 11434 | ~3 GB (both models) | `./data/ollama/` |
-| **ChromaDB** | Container or binary | 8000 | ~500 MB–1 GB | `./data/chromadb/` |
-| **Kiwix-serve** | Binary | 8081 | ~100 MB + page cache | `./datasets/zim/` (RO) |
-| **Tile Server** | TBD | 8082 | ~200 MB | `./datasets/osm/` (RO) |
+| **llama-server** | llama.cpp (chat) | 8081 | ~2.5 GB (Gemma 4 E4B Q4_K_M) | `./data/models/` |
+| **llama-embed** | llama.cpp (embed) | 8082 | ~270 MB (nomic-embed-text) | `./data/models/` |
+| **Qdrant** | Container or binary | 6333 | ~100 MB (on-disk storage) | `./data/qdrant/` |
+| **Kiwix-serve** | Binary | 8083 | ~100 MB + page cache | `./datasets/zim/` (RO) |
+| **Tile Server** | TBD | 8084 | ~200 MB | `./datasets/osm/` (RO) |
+| **Open WebUI** | Container (optional) | 3000 | ~300 MB | `./data/open-webui/` |
 | **Firefox** | Kiosk | — | ~500 MB | — |
 | **OS + overhead** | Linux | — | ~1 GB | — |
-| **Total** | | | **~5.5–6.5 GB** | |
+| **Total** | | | **~5–5.5 GB** | |
 
 Leaves ~9.5–10.5 GB for OS page cache, which Kiwix needs for efficient ZIM serving.
 
@@ -124,11 +126,12 @@ Leaves ~9.5–10.5 GB for OS page cache, which Kiwix needs for efficient ZIM ser
 
 - LlamaIndex runs **only at seed time** on the host machine for ingestion
 - The Go binary (`faraday-server`) handles all runtime RAG orchestration:
-  - Embeds the user query via Ollama's `/api/embeddings` endpoint
-  - Queries ChromaDB's REST API for nearest neighbors
+  - Embeds the user query via llama-embed's OpenAI-compatible `/v1/embeddings` endpoint
+  - Queries Qdrant's REST API for nearest neighbors
   - Builds the prompt with retrieved chunks + source metadata
-  - Calls Ollama's `/api/generate` for the response
+  - Calls llama-server's OpenAI-compatible `/v1/chat/completions` with streaming
   - Merges Kiwix search results for unified search
+- **Open WebUI integration:** llama-server exposes an OpenAI-compatible API — Open WebUI connects automatically with zero configuration
 
 ---
 
@@ -139,8 +142,8 @@ Leaves ~9.5–10.5 GB for OS page cache, which Kiwix needs for efficient ZIM ser
 | Endpoint Pattern | Function |
 |-----------------|----------|
 | `GET /` | Serve SPA (Arrow.js) |
-| `POST /api/chat` | RAG orchestration: embed query → ChromaDB → build prompt → Ollama → stream response |
-| `GET /api/search?q=` | Unified search: query both ChromaDB and Kiwix, merge results |
+| `POST /api/chat` | RAG orchestration: embed query → Qdrant → build prompt → llama-server → stream response |
+| `GET /api/search?q=` | Unified search: query both Qdrant and Kiwix, merge results |
 | `GET /api/mode` / `PUT /api/mode` | Get/set AI mode (reference / general) |
 | `GET /api/lang` / `PUT /api/lang` | Get/set language (en / es) |
 | `GET /wiki/*` | Reverse proxy to Kiwix-serve |
@@ -154,10 +157,10 @@ Leaves ~9.5–10.5 GB for OS page cache, which Kiwix needs for efficient ZIM ser
 User query ("How do I purify water?")
         │
         ▼
-faraday-server embeds query via Ollama /api/embeddings
+faraday-server embeds query via llama-embed /v1/embeddings
         │
         ▼
-Query ChromaDB for top-k nearest chunks (k=5)
+Query Qdrant for top-k nearest chunks (k=5)
         │
         ▼
 Build prompt:
@@ -166,7 +169,7 @@ Build prompt:
   [user query]
         │
         ▼
-Stream response from Ollama /api/generate
+Stream response from llama-server /v1/chat/completions (SSE)
         │
         ▼
 Return to SPA: { answer, sources[ {text, document, page, image?} ] }
@@ -191,7 +194,7 @@ Return to SPA: { answer, sources[ {text, document, page, image?} ] }
 
 - UI text: static translations in the SPA (en/es JSON files)
 - System prompts: separate en/es versions
-- RAG: nomic-embed-text handles multilingual queries adequately for this use case
+- RAG: nomic-embed-text via llama-embed handles multilingual queries adequately for this use case
 - Kiwix: separate Wikipedia EN and ES ZIM files, language toggle switches which is queried
 - User selects language once; persisted in localStorage
 
@@ -280,10 +283,10 @@ SimpleDirectoryReader (with image extraction)
 SentenceSplitter (chunk_size=1024, chunk_overlap=200)
         │
         ▼
-OllamaEmbedding (model="nomic-embed-text")
+OpenAI-compatible embeddings via llama-embed /v1/embeddings
         │
         ▼
-ChromaVectorStore (persist to ./data/chromadb/)
+QdrantVectorStore (on-disk storage, ./data/qdrant/)
 ```
 
 ### 6.3 Image Extraction
@@ -301,8 +304,8 @@ ingestion:
   chunk_size: 1024
   chunk_overlap: 200
   embedding_model: nomic-embed-text
-  ollama_base_url: http://localhost:11434
-  chroma_persist_dir: ./data/chromadb
+  embed_url: http://localhost:8082
+  qdrant_url: http://localhost:6333
   batch_size: 50
   extract_images: true
 ```
@@ -325,7 +328,8 @@ ingestion:
 | Parameters | ~4B (Per-Layer Embeddings) |
 | Context Window | 128K tokens |
 | Quantization | Q4_K_M (~2.5 GB) |
-| Inference | Ollama (llama.cpp), CPU-only |
+| GGUF Source | `huggingface.co/unsloth/gemma-4-E4B-it-GGUF` |
+| Inference | llama.cpp (`llama-server`), CPU-only, OpenAI-compatible API |
 
 ### 7.2 Embedding Model — nomic-embed-text
 
@@ -338,7 +342,15 @@ ingestion:
 
 ### 7.3 NPU — Not Used
 
-CPU-only inference. RKNPU2 requires RKNN model conversion and is not supported by Ollama/llama.cpp. Not worth the engineering investment for this project.
+CPU-only inference. RKNPU2 requires RKNN model conversion and is not supported by llama.cpp. Not worth the engineering investment for this project.
+
+### 7.4 Model Configuration
+
+Models are configurable via `.env` file:
+- `CHAT_MODEL` — GGUF filename for chat (default: `gemma-4-e4b-it-Q4_K_M.gguf`)
+- `EMBED_MODEL` — GGUF filename for embeddings (default: `nomic-embed-text-v1.5.Q8_0.gguf`)
+
+All GGUF files are placed in `data/models/` and mounted read-only into the llama-server containers.
 
 ---
 
@@ -384,8 +396,8 @@ CPU-only inference. RKNPU2 requires RKNN model conversion and is not supported b
 |----------|------|
 | ZIM Archives | ~155 GB |
 | OSM Data | ~70 GB |
-| LLM + Embedding Models | ~3.3 GB |
-| RAG PDFs + ChromaDB Vectors | ~3 GB |
+| LLM + Embedding Models (GGUF) | ~3.3 GB |
+| RAG PDFs + Qdrant Vectors | ~3 GB |
 | OS + Containers + faraday-server | ~5 GB |
 | Media (user content) | Variable |
 | **Subtotal (system)** | **~236 GB** |
@@ -407,8 +419,9 @@ CPU-only inference. RKNPU2 requires RKNN model conversion and is not supported b
 │   │   └── es.json
 │   └── lib/                    # Arrow.js, Player.js, Nostalgist bundles
 ├── data/
-│   ├── ollama/                 # Model weights
-│   ├── chromadb/               # Vector embeddings
+│   ├── models/                 # GGUF model files (chat + embed)
+│   ├── qdrant/                 # Qdrant on-disk vector storage
+│   ├── open-webui/             # Open WebUI data (optional)
 │   └── media/
 │       ├── movies/             # Flat: *.mp4
 │       ├── music/              # Flat: *.mp3, *.flac, *.ogg
@@ -433,21 +446,29 @@ For development on x86_64 or Apple Silicon:
 
 ```yaml
 services:
-  ollama:
-    image: ollama/ollama
-    ports: ["11434:11434"]
-    volumes: ["./data/ollama:/root/.ollama"]
+  llama-server:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    ports: ["8081:8081"]
+    volumes: ["./data/models:/models:ro"]
+    command: -m /models/${CHAT_MODEL} --port 8081 --host 0.0.0.0 -c 8192
 
-  chromadb:
-    image: chromadb/chroma
-    ports: ["8000:8000"]
-    volumes: ["./data/chromadb:/chroma/chroma"]
+  llama-embed:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    ports: ["8082:8082"]
+    volumes: ["./data/models:/models:ro"]
+    command: -m /models/${EMBED_MODEL} --port 8082 --host 0.0.0.0 --embedding
 
-  kiwix:
-    image: kiwix/kiwix-serve
-    ports: ["8081:80"]
-    command: /data/*.zim
-    volumes: ["./datasets/zim:/data:ro"]
+  qdrant:
+    image: qdrant/qdrant
+    ports: ["6333:6333"]
+    volumes: ["./data/qdrant:/qdrant/storage"]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports: ["3000:8080"]
+    environment:
+      OPENAI_API_BASE_URLS: http://llama-server:8081/v1
+      OPENAI_API_KEYS: not-needed
 ```
 
 `faraday-server` runs natively on the host during development (`go run .`).
@@ -479,12 +500,12 @@ make clone-nvme     # Create NVMe clone for spare modules
 2. Run ingestion pipeline on host (produces ChromaDB data)
 3. SSH to RK1:
    - Copy `faraday-server` binary + SPA assets
-   - Copy `data/ollama/` (model weights)
-   - Copy `data/chromadb/` (vector index)
+   - Copy `data/models/` (GGUF model files)
+   - Copy `data/qdrant/` (vector index)
    - Copy `datasets/zim/` (ZIM archives)
    - Copy `datasets/osm/` (planet file + pre-rendered tiles)
    - Copy `data/media/` (user content)
-   - Install systemd services for Ollama, ChromaDB, Kiwix, tile server, faraday-server
+   - Install systemd services for llama-server, llama-embed, Qdrant, Kiwix, tile server, faraday-server
    - Configure Firefox kiosk mode to open `http://localhost:8080` on boot
 4. Verify: reboot RK1, confirm all services start, test each tab
 
@@ -501,8 +522,9 @@ After successful seed + verification:
 
 1. Power on → Linux boots (~10s)
 2. systemd starts services in order:
-   - Ollama (loads models into RAM) (~15-20s)
-   - ChromaDB (~5s)
+   - llama-server (loads Gemma 4 E4B into RAM) (~15-20s)
+   - llama-embed (loads nomic-embed-text) (~5s)
+   - Qdrant (~5s)
    - Kiwix-serve (~5s)
    - Tile server (~5s)
    - faraday-server (~1s)
@@ -520,7 +542,7 @@ After successful seed + verification:
 | Battery exhaustion at night | System dies | Suspend-to-RAM after idle timeout; user education on power management |
 | Solar panel damage | No recharge | Battery budgeting — limit use to essential queries |
 | Gemma 4B insufficient quality | Poor RAG answers | Tight chunking strategy; high-quality source documents; model is convenience layer over raw sources |
-| ChromaDB corruption | RAG stops working | Encyclopedia tab (Kiwix) still works as fallback; raw PDFs still on disk |
+| Qdrant storage corruption | RAG stops working | Encyclopedia tab (Kiwix) still works as fallback; raw PDFs still on disk |
 | RK3588 thermal throttling | Slow inference | Passive cooling design; inference is bursty not sustained |
 
 ---
@@ -548,11 +570,11 @@ After successful seed + verification:
 | 2 | 16 GB RAM | Required for LLM + services + page cache |
 | 3 | No image generation | Manual illustrations extracted from source PDFs are more accurate and free |
 | 4 | No Python in production | Go binary handles RAG orchestration; Python only at seed time |
-| 5 | No Open WebUI | Custom Arrow.js SPA — simpler, lighter, purpose-built |
+| 5 | Open WebUI available as optional secondary interface | Auto-connects to llama-server's OpenAI-compatible API — zero config |
 | 6 | No NPU | RKNN conversion not worth engineering cost; CPU inference is adequate |
 | 7 | No automatic failover | Manual swap saves power and complexity |
 | 8 | No update mechanism | Seeded once, never updated — doomsday assumption |
 | 9 | Two AI modes | Reference (safe, cited) and General (flexible, warned) |
 | 10 | Flat media directories | Simplicity over organization |
 | 11 | Full planet OSM | Unknown deployment location |
-| 12 | Arrow.js + Go | Minimal dependencies, debuggable in a pinch |
+| 12 | Arrow.js + Go + llama.cpp + Qdrant | Minimal dependencies, debuggable in a pinch, OpenAI-compatible API |
