@@ -1,4 +1,4 @@
-.PHONY: dev server build test lint clean build-arm64 ingest ingest-force setup
+.PHONY: dev dev-full server build build-frontend build-arm64 test typecheck lint ingest ingest-force setup clean
 
 # Start full dev stack: llama-server + llama-embed + Qdrant (Docker) + faraday-server (native)
 dev: build
@@ -24,9 +24,17 @@ dev-full: build
 	@echo "Starting faraday-server on :8080"
 	./faraday-server
 
-# Build the Go binary
-build:
+# Build everything
+build: build-frontend
 	go build -o faraday-server ./cmd/faraday-server/
+
+# Build frontend (TypeScript → bundled JS)
+build-frontend:
+	cd frontend && bun build src/app.ts --outdir ../static --minify
+
+# Frontend dev mode (watch + rebuild)
+dev-frontend:
+	cd frontend && bun build src/app.ts --outdir ../static --watch
 
 # Run just the Go server (assumes backends already running)
 server: build
@@ -40,22 +48,27 @@ ingest:
 ingest-force:
 	python3 src/ingestion/pipeline.py --force
 
-# First-time setup: install Python deps
+# First-time setup: install all deps
 setup:
+	cd frontend && bun install
 	pip install -r requirements.txt
 
-# Run tests
+# Run Go tests
 test:
 	go test ./...
+
+# TypeScript type-check
+typecheck:
+	cd frontend && bunx tsc --noEmit
 
 # Lint
 lint:
 	golangci-lint run ./...
 
 # Cross-compile for ARM64
-build-arm64:
+build-arm64: build-frontend
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o faraday-server-arm64 ./cmd/faraday-server/
 
 # Clean build artifacts
 clean:
-	rm -f faraday-server faraday-server-arm64
+	rm -f faraday-server faraday-server-arm64 static/app.js
