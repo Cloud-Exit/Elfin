@@ -202,27 +202,33 @@ const tabContent = {
 
 // -- App shell --
 const app = html`
-  <div id="app">
-    <div class="header">
-      <h1>Faraday-OS</h1>
-      <div class="status">
-        <span class="status-dot ${() => state.serverStatus}"></span>
-        ${() => state.serverStatus === 'ok' ? 'Systems online'
-              : state.serverStatus === 'degraded' ? 'Degraded'
-              : state.serverStatus === 'loading' ? 'Connecting...'
-              : 'Offline'}
+  <div class="crt-frame">
+    <div class="crt-scanlines"></div>
+    <div class="crt-glow"></div>
+    <div class="crt-output">
+      <div class="pipboy">
+        <div class="header">
+          <h1>Faraday-OS</h1>
+          <div class="status">
+            <span class="status-dot ${() => state.serverStatus}"></span>
+            ${() => state.serverStatus === 'ok' ? 'Systems online'
+                  : state.serverStatus === 'degraded' ? 'Degraded'
+                  : state.serverStatus === 'loading' ? 'Connecting...'
+                  : 'Offline'}
+          </div>
+        </div>
+        <div class="tabs">
+          ${() => tabs.map(t => html`
+            <button
+              class="tab ${() => state.tab === t.id ? 'active' : ''}"
+              @click="${() => { state.tab = t.id }}"
+            >${t.label}</button>
+          `)}
+        </div>
+        <div class="content">
+          ${() => tabContent[state.tab]()}
+        </div>
       </div>
-    </div>
-    <div class="tabs">
-      ${() => tabs.map(t => html`
-        <button
-          class="tab ${() => state.tab === t.id ? 'active' : ''}"
-          @click="${() => { state.tab = t.id }}"
-        >${t.label}</button>
-      `)}
-    </div>
-    <div class="content">
-      ${() => tabContent[state.tab]()}
     </div>
   </div>
 `
