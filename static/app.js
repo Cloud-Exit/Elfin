@@ -6,7 +6,7 @@ const state = reactive({
   messages: [],
   input: '',
   sending: false,
-  ollamaStatus: 'loading',
+  serverStatus: 'loading',
 })
 
 const tabs = [
@@ -24,15 +24,18 @@ async function checkHealth() {
   try {
     const res = await fetch('/api/health')
     const data = await res.json()
-    state.ollamaStatus = data.status === 'healthy' ? 'ok' : 'err'
+    state.serverStatus = data.status === 'healthy' ? 'ok'
+      : data.status === 'degraded' ? 'degraded' : 'err'
   } catch {
-    state.ollamaStatus = 'err'
+    state.serverStatus = 'err'
   }
 }
 checkHealth()
 setInterval(checkHealth, 30000)
 
 // -- Chat --
+// messages: { role: 'user'|'assistant'|'error', content: string, sources?: Source[] }
+
 async function sendMessage() {
   const text = state.input.trim()
   if (!text || state.sending) return
@@ -41,8 +44,7 @@ async function sendMessage() {
   state.input = ''
   state.sending = true
 
-  // Add empty assistant message to stream into
-  const assistantMsg = { role: 'assistant', content: '' }
+  const assistantMsg = { role: 'assistant', content: '', sources: [] }
   state.messages.push(assistantMsg)
 
   try {
@@ -56,7 +58,6 @@ async function sendMessage() {
       const err = await res.text()
       assistantMsg.content = `Error: ${err}`
       assistantMsg.role = 'error'
-      // Force reactivity update
       state.messages = [...state.messages]
       state.sending = false
       return
@@ -72,34 +73,36 @@ async function sendMessage() {
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
-      buffer = lines.pop() // keep incomplete line
+      buffer = lines.pop()
 
       for (const line of lines) {
         if (!line.trim()) continue
         try {
-          const chunk = JSON.parse(line)
-          if (chunk.message && chunk.message.content) {
-            assistantMsg.content += chunk.message.content
-            // Force reactivity
-            state.messages = [...state.messages]
+          const msg = JSON.parse(line)
+          if (msg.type === 'sources' && msg.sources) {
+            assistantMsg.sources = msg.sources
+          } else if (msg.type === 'token' && msg.content) {
+            assistantMsg.content += msg.content
+          } else if (msg.type === 'error') {
+            assistantMsg.content = `Error: ${msg.error}`
+            assistantMsg.role = 'error'
           }
+          state.messages = [...state.messages]
         } catch {
-          // skip malformed lines
+          // skip malformed
         }
       }
     }
 
-    // Process remaining buffer
+    // Remaining buffer
     if (buffer.trim()) {
       try {
-        const chunk = JSON.parse(buffer)
-        if (chunk.message && chunk.message.content) {
-          assistantMsg.content += chunk.message.content
+        const msg = JSON.parse(buffer)
+        if (msg.type === 'token' && msg.content) {
+          assistantMsg.content += msg.content
           state.messages = [...state.messages]
         }
-      } catch {
-        // skip
-      }
+      } catch { /* skip */ }
     }
   } catch (err) {
     assistantMsg.content = `Connection error: ${err.message}`
@@ -117,6 +120,38 @@ function handleKeydown(e) {
   }
 }
 
+// -- Render helpers --
+function renderSources(sources) {
+  if (!sources || sources.length === 0) return html`<span></span>`
+  return html`
+    <div class="sources">
+      <div class="sources-header">Sources</div>
+      ${sources.map((s, i) => html`
+        <div class="source">
+          <div class="source-label">[${i + 1}] ${s.source_file}${s.page ? ` — p.${s.page}` : ''}</div>
+          <div class="source-text">${s.text}</div>
+        </div>
+      `)}
+    </div>
+  `
+}
+
+function renderMessage(m) {
+  if (m.role === 'user') {
+    return html`<div class="message user">${m.content}</div>`
+  }
+  if (m.role === 'error') {
+    return html`<div class="message error">${m.content}</div>`
+  }
+  // assistant
+  return html`
+    <div class="message assistant">
+      <div class="message-text">${m.content}</div>
+      ${renderSources(m.sources)}
+    </div>
+  `
+}
+
 // -- Tab content --
 function aiTab() {
   return html`
@@ -124,9 +159,7 @@ function aiTab() {
       <div class="chat-messages" id="chat-messages">
         ${() => state.messages.length === 0
           ? html`<div class="placeholder">Ask anything</div>`
-          : html`<div>${() => state.messages.map(m =>
-              html`<div class="message ${m.role}">${m.content}</div>`
-            )}</div>`
+          : html`<div>${() => state.messages.map(m => renderMessage(m))}</div>`
         }
       </div>
       <div class="chat-input-area">
@@ -171,10 +204,11 @@ const app = html`
     <div class="header">
       <h1>Faraday-OS</h1>
       <div class="status">
-        <span class="status-dot ${() => state.ollamaStatus}"></span>
-        ${() => state.ollamaStatus === 'ok' ? 'Ollama connected'
-              : state.ollamaStatus === 'loading' ? 'Connecting...'
-              : 'Ollama offline'}
+        <span class="status-dot ${() => state.serverStatus}"></span>
+        ${() => state.serverStatus === 'ok' ? 'Systems online'
+              : state.serverStatus === 'degraded' ? 'Degraded'
+              : state.serverStatus === 'loading' ? 'Connecting...'
+              : 'Offline'}
       </div>
     </div>
     <div class="tabs">

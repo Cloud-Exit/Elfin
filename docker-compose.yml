@@ -6,3 +6,13 @@ services:
     volumes:
       - ./data/ollama:/root/.ollama
     restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/chromadb:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+    restart: unless-stopped

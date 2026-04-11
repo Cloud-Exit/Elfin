@@ -1,11 +1,13 @@
-.PHONY: dev server ollama build test lint clean build-arm64
+.PHONY: dev server build test lint clean build-arm64 ingest setup
 
-# Start full dev stack: Ollama (Docker) + faraday-server (native)
+# Start full dev stack: Ollama + ChromaDB (Docker) + faraday-server (native)
 dev: build
-	@echo "Starting Ollama..."
-	docker compose up -d ollama
+	@echo "Starting services..."
+	docker compose up -d ollama chromadb
 	@echo "Waiting for Ollama..."
 	@until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do sleep 1; done
+	@echo "Waiting for ChromaDB..."
+	@until curl -sf http://localhost:8000/api/v1/heartbeat > /dev/null 2>&1; do sleep 1; done
 	@echo "Starting faraday-server on :8080"
 	./faraday-server
 
@@ -13,9 +15,25 @@ dev: build
 build:
 	go build -o faraday-server ./cmd/faraday-server/
 
-# Run just the Go server (assumes Ollama already running)
+# Run just the Go server (assumes backends already running)
 server: build
 	./faraday-server
+
+# Run ingestion pipeline (requires Ollama + ChromaDB running)
+ingest:
+	python3 src/ingestion/pipeline.py
+
+# Force re-ingest all documents
+ingest-force:
+	python3 src/ingestion/pipeline.py --force
+
+# First-time setup: install Python deps, pull models
+setup:
+	pip install -r requirements.txt
+	docker compose up -d ollama
+	@until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do sleep 1; done
+	docker compose exec ollama ollama pull nomic-embed-text
+	docker compose exec ollama ollama pull gemma3:4b
 
 # Run tests
 test:
@@ -23,7 +41,7 @@ test:
 
 # Lint
 lint:
-	~/go/bin/golangci-lint run ./...
+	golangci-lint run ./...
 
 # Cross-compile for ARM64
 build-arm64:

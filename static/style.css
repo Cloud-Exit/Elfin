@@ -178,6 +178,46 @@ body {
 .send-btn:hover { opacity: 0.9; }
 .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+/* Sources */
+.sources {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sources-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.source {
+  margin-bottom: 8px;
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 3px;
+  border-left: 2px solid var(--accent-dim);
+}
+
+.source-label {
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 4px;
+  font-weight: bold;
+}
+
+.source-text {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.status-dot.degraded { background: #ff9800; }
+
 /* Placeholder */
 .placeholder {
   display: flex;

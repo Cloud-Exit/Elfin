@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,24 +10,45 @@ import (
 	"testing"
 )
 
-func TestHealthHandler_OllamaDown(t *testing.T) {
-	cfg := Config{OllamaURL: "http://127.0.0.1:1"}
+func testConfig() Config {
+	return Config{
+		OllamaURL:  "http://127.0.0.1:1",
+		ChromaURL:  "http://127.0.0.1:1",
+		Model:      "test",
+		EmbedModel: "test",
+		Collection: "test",
+	}
+}
+
+func TestHealthHandler_AllDown(t *testing.T) {
+	cfg := testConfig()
 	handler := healthHandler(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
 
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "unhealthy") {
-		t.Errorf("expected unhealthy in body, got %s", w.Body.String())
+
+	var result map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if result["status"] != "degraded" {
+		t.Errorf("expected degraded, got %s", result["status"])
+	}
+	if result["ollama"] != "unreachable" {
+		t.Errorf("expected ollama unreachable, got %s", result["ollama"])
+	}
+	if result["chromadb"] != "unreachable" {
+		t.Errorf("expected chromadb unreachable, got %s", result["chromadb"])
 	}
 }
 
 func TestChatHandler_InvalidJSON(t *testing.T) {
-	cfg := Config{OllamaURL: "http://127.0.0.1:1", Model: "test"}
+	cfg := testConfig()
 	handler := chatHandler(cfg)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader("not json"))
@@ -38,16 +60,46 @@ func TestChatHandler_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestChatHandler_OllamaUnreachable(t *testing.T) {
-	cfg := Config{OllamaURL: "http://127.0.0.1:1", Model: "test"}
+func TestChatHandler_RAGFallback(t *testing.T) {
+	// With unreachable backends, RAG falls back to direct prompt,
+	// then Ollama call also fails — we should get an error stream message.
+	cfg := testConfig()
 	handler := chatHandler(cfg)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`))
 	w := httptest.NewRecorder()
 	handler(w, req)
 
-	if w.Code != http.StatusBadGateway {
-		t.Errorf("expected 502, got %d", w.Code)
+	// Should still be 200 since we stream NDJSON (errors are in-band)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+
+	// Parse the NDJSON lines
+	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 NDJSON lines, got %d: %s", len(lines), w.Body.String())
+	}
+
+	// First line should be sources (empty since RAG failed)
+	var sourcesMsg StreamMessage
+	if err := json.Unmarshal([]byte(lines[0]), &sourcesMsg); err != nil {
+		t.Fatalf("parse sources line: %v", err)
+	}
+	if sourcesMsg.Type != "sources" {
+		t.Errorf("expected sources message, got %s", sourcesMsg.Type)
+	}
+
+	// Second line should be error (Ollama unreachable)
+	var errMsg StreamMessage
+	if err := json.Unmarshal([]byte(lines[1]), &errMsg); err != nil {
+		t.Fatalf("parse error line: %v", err)
+	}
+	if errMsg.Type != "error" {
+		t.Errorf("expected error message, got %s", errMsg.Type)
+	}
+	if !strings.Contains(errMsg.Error, "ollama") {
+		t.Errorf("expected ollama error, got %s", errMsg.Error)
 	}
 }
 
@@ -97,5 +149,43 @@ func TestEnvOr(t *testing.T) {
 	t.Setenv("TEST_ENV_OR", "value")
 	if got := envOr("TEST_ENV_OR", "fallback"); got != "value" {
 		t.Errorf("expected value, got %s", got)
+	}
+}
+
+func TestBuildRAGPrompt(t *testing.T) {
+	sources := []Source{
+		{Text: "Water can be purified by boiling.", SourceFile: "FM 3-05.70", Page: "42"},
+		{Text: "Solar stills collect condensation.", SourceFile: "FM 3-05.70", Page: "45"},
+	}
+
+	messages := buildRAGPrompt("how to purify water", sources)
+
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
+	}
+	if messages[0].Role != "system" {
+		t.Errorf("expected system role, got %s", messages[0].Role)
+	}
+	if !strings.Contains(messages[0].Content, "FM 3-05.70") {
+		t.Error("system prompt should contain source file name")
+	}
+	if !strings.Contains(messages[0].Content, "page 42") {
+		t.Error("system prompt should contain page number")
+	}
+	if messages[1].Role != "user" {
+		t.Errorf("expected user role, got %s", messages[1].Role)
+	}
+	if messages[1].Content != "how to purify water" {
+		t.Errorf("expected query in user message, got %s", messages[1].Content)
+	}
+}
+
+func TestBuildDirectPrompt(t *testing.T) {
+	messages := buildDirectPrompt("hello")
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if messages[0].Role != "user" || messages[0].Content != "hello" {
+		t.Errorf("unexpected message: %+v", messages[0])
 	}
 }
