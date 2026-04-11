@@ -1,0 +1,23 @@
+# Data directories (large files, user content)
+data/ollama/*
+data/chromadb/*
+data/media/movies/*
+data/media/music/*
+data/media/books/*
+data/media/games/snes/*
+data/media/games/msx2/*
+datasets/raw/*
+datasets/zim/*
+datasets/osm/*
+logs/*
+
+# Keep directory structure
+!**/.gitkeep
+
+# Go build output
+/faraday-server
+/faraday-server-arm64
+*.exe
+
+# OS
+.DS_Store
