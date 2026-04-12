@@ -1,7 +1,7 @@
 import { resolve, join, extname } from 'path'
 import { existsSync } from 'fs'
 
-const PORT = Number(process.env.LEFIN_PORT ?? 8080)
+const PORT = Number(process.env.LEFIN_PORT ?? 8085)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
 
 const MIME_TYPES: Record<string, string> = {
