@@ -1,0 +1,25 @@
+{
+  "name": "lefin-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/backend/server.ts",
+    "build": "bun build src/frontend/main.tsx --outdir static/dist --minify",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "bunx prisma generate",
+    "db:migrate": "bunx prisma migrate dev",
+    "db:push": "bunx prisma db push"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "react": "19",
+    "react-dom": "19",
+    "react-router": "7"
+  }
+}
