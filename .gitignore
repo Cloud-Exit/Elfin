@@ -22,8 +22,8 @@ static/app.js
 frontend/node_modules/
 
 # Go build output
-/faraday-server
-/faraday-server-arm64
+/lefin-server
+/lefin-server-arm64
 *.exe
 
 # OS

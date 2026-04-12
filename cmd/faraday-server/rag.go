@@ -146,7 +146,7 @@ func buildRAGPrompt(query string, sources []Source) []OllamaMessage {
 		contextBuilder.WriteString("\n\n")
 	}
 
-	systemPrompt := `You are Faraday, a survival reference assistant. Answer the user's question using ONLY the provided source material below. Rules:
+	systemPrompt := `You are Lefin, a survival reference assistant. Answer the user's question using ONLY the provided source material below. Rules:
 - Cite which source you are drawing from (e.g. "According to FM 3-05.70...")
 - If the sources do not contain enough information to answer, say: "I don't have information on that in my reference materials. Try the Encyclopedia tab."
 - Never speculate or add information not present in the sources.

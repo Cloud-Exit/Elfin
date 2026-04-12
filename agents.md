@@ -1,4 +1,4 @@
-# Faraday-OS — Architecture Decisions
+# LefinOS — Architecture Decisions
 
 ## Design Philosophy
 
@@ -10,7 +10,7 @@ Every dependency must justify its existence. Every watt matters. This is a dooms
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| **Server** | Go (`faraday-server`) | Single binary, no runtime, cross-compiles to ARM64, debuggable in a pinch |
+| **Server** | Go (`lefin-server`) | Single binary, no runtime, cross-compiles to ARM64, debuggable in a pinch |
 | **Frontend** | TypeScript + Arrow.js + Bun | Strict types everywhere, ~2KB reactive framework, Bun bundles to a single 23KB JS file |
 | **Inference** | llama.cpp (`llama-server`) | Direct GGUF loading, OpenAI-compatible API, no Python runtime needed, CPU-only |
 | **Embeddings** | llama.cpp (`llama-embed`) | Same binary, separate instance, `/v1/embeddings` endpoint |
@@ -82,7 +82,7 @@ The custom SPA is the primary interface — purpose-built for the 10.6" touchscr
 ## Dependencies (total)
 
 ### Production (on device)
-- `faraday-server` — single Go binary (~8MB)
+- `lefin-server` — single Go binary (~8MB)
 - `llama-server` — single C++ binary (~5MB)
 - `qdrant` — single Rust binary (~30MB)
 - `kiwix-serve` — single C++ binary (~5MB)
@@ -103,7 +103,7 @@ The custom SPA is the primary interface — purpose-built for the 10.6" touchscr
 
 ```
 /workspace/
-├── cmd/faraday-server/     # Go server source
+├── cmd/lefin-server/     # Go server source
 │   ├── main.go             # HTTP server, routes, streaming
 │   ├── rag.go              # RAG orchestration (embed, search, prompt)
 │   ├── main_test.go        # Server tests
@@ -116,7 +116,7 @@ The custom SPA is the primary interface — purpose-built for the 10.6" touchscr
 │   │   └── arrow.d.ts      # Arrow.js type augmentation
 │   ├── package.json
 │   └── tsconfig.json
-├── static/                 # Served by faraday-server
+├── static/                 # Served by lefin-server
 │   ├── index.html
 │   ├── style.css           # Pip-Boy theme
 │   └── app.js              # Built by bun (gitignored)

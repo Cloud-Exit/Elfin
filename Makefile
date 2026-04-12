@@ -1,6 +1,6 @@
 .PHONY: dev dev-full server build build-frontend build-arm64 test typecheck lint ingest ingest-force setup clean
 
-# Start full dev stack: llama-server + llama-embed + Qdrant (Docker) + faraday-server (native)
+# Start full dev stack: llama-server + llama-embed + Qdrant (Docker) + lefin-server (native)
 dev: build
 	@echo "Starting services..."
 	docker compose up -d llama-server llama-embed qdrant
@@ -10,8 +10,8 @@ dev: build
 	@until curl -sf http://localhost:8082/health > /dev/null 2>&1; do sleep 1; done
 	@echo "Waiting for Qdrant..."
 	@until curl -sf http://localhost:6333/healthz > /dev/null 2>&1; do sleep 1; done
-	@echo "Starting faraday-server on :8080"
-	./faraday-server
+	@echo "Starting lefin-server on :8080"
+	./lefin-server
 
 # Start with Open WebUI too
 dev-full: build
@@ -21,12 +21,12 @@ dev-full: build
 	@until curl -sf http://localhost:8082/health > /dev/null 2>&1; do sleep 1; done
 	@until curl -sf http://localhost:6333/healthz > /dev/null 2>&1; do sleep 1; done
 	@echo "Open WebUI at http://localhost:3000"
-	@echo "Starting faraday-server on :8080"
-	./faraday-server
+	@echo "Starting lefin-server on :8080"
+	./lefin-server
 
 # Build everything
 build: build-frontend
-	go build -o faraday-server ./cmd/faraday-server/
+	go build -o lefin-server ./cmd/lefin-server/
 
 # Build frontend (TypeScript → bundled JS)
 build-frontend:
@@ -38,7 +38,7 @@ dev-frontend:
 
 # Run just the Go server (assumes backends already running)
 server: build
-	./faraday-server
+	./lefin-server
 
 # Run ingestion pipeline (requires llama-embed + Qdrant running)
 ingest:
@@ -67,8 +67,8 @@ lint:
 
 # Cross-compile for ARM64
 build-arm64: build-frontend
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o faraday-server-arm64 ./cmd/faraday-server/
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o lefin-server-arm64 ./cmd/lefin-server/
 
 # Clean build artifacts
 clean:
-	rm -f faraday-server faraday-server-arm64 static/app.js
+	rm -f lefin-server lefin-server-arm64 static/app.js

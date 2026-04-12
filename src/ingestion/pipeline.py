@@ -1,5 +1,5 @@
 """
-Faraday-OS ingestion pipeline.
+LefinOS ingestion pipeline.
 
 Reads PDFs/MDs/TXTs from datasets/raw, chunks them, embeds via llama-server
 (OpenAI-compatible), and stores vectors in Qdrant. Idempotent via SHA256 hash.
@@ -26,12 +26,12 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-log = logging.getLogger("faraday-ingest")
+log = logging.getLogger("lefin-ingest")
 
 DEFAULT_SOURCE_DIR = "./datasets/raw"
 DEFAULT_QDRANT_URL = "http://localhost:6333"
 DEFAULT_EMBED_URL = "http://localhost:8082"
-COLLECTION_NAME = "faraday_docs"
+COLLECTION_NAME = "lefin_docs"
 CHUNK_SIZE = 1024
 CHUNK_OVERLAP = 200
 EMBED_MODEL = "nomic-embed-text"
@@ -193,7 +193,7 @@ def run_pipeline(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Faraday-OS document ingestion pipeline")
+    parser = argparse.ArgumentParser(description="LefinOS document ingestion pipeline")
     parser.add_argument("--source-dir", default=DEFAULT_SOURCE_DIR, help="Directory with source documents")
     parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT_URL, help="Qdrant HTTP URL")
     parser.add_argument("--embed-url", default=DEFAULT_EMBED_URL, help="Embedding server URL (OpenAI-compatible)")

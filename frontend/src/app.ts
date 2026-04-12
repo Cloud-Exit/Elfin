@@ -159,7 +159,7 @@ const app = html`
     <div class="crt-output">
       <div class="pipboy">
         <div class="header">
-          <h1>Faraday-OS</h1>
+          <h1>LefinOS</h1>
           <div class="status">
             <span class="status-dot ${() => state.serverStatus}"></span>
             ${() => state.serverStatus === 'ok' ? 'Systems online'

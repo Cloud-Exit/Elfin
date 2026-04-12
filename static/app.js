@@ -1,207 +1,44 @@
-import { reactive, html } from 'https://esm.sh/@arrow-js/core'
-
-// -- State --
-const state = reactive({
-  tab: 'ai',
-  messages: [],
-  input: '',
-  sending: false,
-  serverStatus: 'loading',
-})
-
-const tabs = [
-  { id: 'ai', label: 'AI' },
-  { id: 'encyclopedia', label: 'Encyclopedia' },
-  { id: 'maps', label: 'Maps' },
-  { id: 'movies', label: 'Movies' },
-  { id: 'music', label: 'Music' },
-  { id: 'books', label: 'Books' },
-  { id: 'games', label: 'Games' },
-]
-
-// -- Health check --
-async function checkHealth() {
-  try {
-    const res = await fetch('/api/health')
-    const data = await res.json()
-    state.serverStatus = data.status === 'healthy' ? 'ok'
-      : data.status === 'degraded' ? 'degraded' : 'err'
-    state.services = data
-  } catch {
-    state.serverStatus = 'err'
-    state.services = {}
-  }
-}
-checkHealth()
-setInterval(checkHealth, 30000)
-
-// -- Chat --
-// messages: { role: 'user'|'assistant'|'error', content: string, sources?: Source[] }
-
-async function sendMessage() {
-  const text = state.input.trim()
-  if (!text || state.sending) return
-
-  state.messages.push({ role: 'user', content: text })
-  state.input = ''
-  state.sending = true
-
-  const assistantMsg = { role: 'assistant', content: '', sources: [] }
-  state.messages.push(assistantMsg)
-
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
-    })
-
-    if (!res.ok) {
-      const err = await res.text()
-      assistantMsg.content = `Error: ${err}`
-      assistantMsg.role = 'error'
-      state.messages = [...state.messages]
-      state.sending = false
-      return
-    }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop()
-
-      for (const line of lines) {
-        if (!line.trim()) continue
-        try {
-          const msg = JSON.parse(line)
-          if (msg.type === 'sources' && msg.sources) {
-            assistantMsg.sources = msg.sources
-          } else if (msg.type === 'token' && msg.content) {
-            assistantMsg.content += msg.content
-          } else if (msg.type === 'error') {
-            assistantMsg.content = `Error: ${msg.error}`
-            assistantMsg.role = 'error'
-          }
-          state.messages = [...state.messages]
-        } catch {
-          // skip malformed
-        }
-      }
-    }
-
-    // Remaining buffer
-    if (buffer.trim()) {
-      try {
-        const msg = JSON.parse(buffer)
-        if (msg.type === 'token' && msg.content) {
-          assistantMsg.content += msg.content
-          state.messages = [...state.messages]
-        }
-      } catch { /* skip */ }
-    }
-  } catch (err) {
-    assistantMsg.content = `Connection error: ${err.message}`
-    assistantMsg.role = 'error'
-    state.messages = [...state.messages]
-  }
-
-  state.sending = false
-}
-
-function handleKeydown(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    sendMessage()
-  }
-}
-
-// -- Render helpers --
-function renderSources(sources) {
-  if (!sources || sources.length === 0) return html`<span></span>`
-  return html`
+var w$=Symbol(),X$=[],k$=[],P$=null;function N($){return typeof $==="function"&&!!$.isT}function z$($){return $!==null&&typeof $==="object"}function i($){return z$($)&&"$on"in $}function m($){return z$($)&&"ref"in $}function V0($){let G=$;return(J,_)=>{if(!G[w$]){if(G[w$]=!0,G._n=J,G._o=_,!X$.length)queueMicrotask(i$);X$.push(G)}}}function i$(){let $=X$;X$=[];let G=k$;k$=[];for(let J=0;J<$.length;J++){let _=$[J],X=_._n,Y=_._o;_._n=void 0,_._o=void 0,_[w$]=!1,_(X,Y)}for(let J=0;J<G.length;J++)G[J]();if(X$.length)queueMicrotask(i$)}function L$($){let G=P$;return P$=$,G}function R0($){P$?.push($)}function A$($,G,J){if(G===".innerhtml")G=".innerHTML";if(G==="value"&&"value"in $||G==="checked"||G[0]==="."&&(G=G.slice(1))){if($[G]=J,$.getAttribute(G)!=J)J=!1}J!==!1?$.setAttribute(G,J):$.removeAttribute(G)}var l=[],f$=[],x$=[],u$=[],S$=0;function a$($){let G=u$[$],J=G?.length?G.pop():S$;if(l[J]=$,J===S$)S$+=$+1;return J}function r$($,G,J=0){let _=l[G];for(let X=1;X<=_;X++){let Y=$[J+X-1],A=G+X;if(Object.is(l[A],Y))continue;l[A]=Y;let W=f$[A];if(!W)continue;let M=x$[A];if(M!==void 0)A$(W,M,Y);else if(typeof W==="function")W(Y);else W.data=Y||Y===0?Y:""}}function u($,G,J){f$[$]=G,x$[$]=J}function n$($){let G=l[$];if(G===void 0)return;for(let J=0;J<=G;J++)l[$+J]=void 0,f$[$+J]=void 0,x$[$+J]=void 0;(u$[G]??=[]).push($)}var t$=new WeakMap,U$=[],$$=[],c=($)=>t$.get($),B0=-1,E0=0,q$=0,Y$=[],Z$=[],b$=[],p$=[],I0={push:1,pop:1,shift:1,unshift:1,splice:1,sort:1,copyWithin:1,fill:1,reverse:1},W$=[];function a($){if(typeof $==="function"){let _=a({value:void 0});return U$[c(_)]=!0,D$($,(X)=>_.value=X),_}if(i($))return $;if(!z$($))throw Error("Expected object");let G=++B0;$$[G]={};let J=new Proxy($,T0);return t$.set($,G).set(J,G),J}function K0($,G,J,_){if(typeof _==="function"&&I0[G]){let X=p$[$];if(!X)X=p$[$]={};let Y=X[G];if(!Y)Y=(...A)=>{let W=Reflect.apply(_,J,A);return C$($),W},X[G]=Y;return Y}if(e$(_))return $0(_,$,G);if(G!=="length"&&typeof _!=="function")Q$($,G);return _}var T0={has($,G){if(G in N$)return!0;return Q$(c($),G),G in $},get($,G,J){let _=c($);if(G in N$)return N$[G];let X=Reflect.get($,G,J),Y;if(z$(X)&&!i(X))Y=d$(X,_,G),$[G]=Y;let A=Y??X;if(Array.isArray($))return K0(_,G,$,A);if(e$(A))return $0(A,_,G);return Q$(_,G),A},set($,G,J,_){let X=c($),Y=!(G in $),A=z$(J)&&!i(J)?d$(J,X,G):null,W=$[G],M=A??J;if(i(M)&&U$[c(M)])H$(c(M),X,G);let H=Reflect.set($,G,M,_);if(W!==M&&i(W)&&i(M)){let E=W$[c(W)];if(E){let I=-1;for(let R=0;R<E.length;R++){let[V,v]=E[R];if(V==X&&v==G){I=R;break}}if(I>-1)E.splice(I,1)}H$(c(M),X,G)}if(G0(X,G,J,W,Y||G==="value"&&U$[X]),Array.isArray($)&&G==="length")C$(X);return H}};function d$($,G,J){let _=a($);return H$(c($),G,J),_}function e$($){return i($)&&U$[c($)]}function $0($,G,J){let _=c($);return Q$(G,J),H$(_,G,J),Q$(_,"value"),$.value}function H$($,G,J){let _=W$[$];if(_)for(let X=0;X<_.length;X++){let[Y,A]=_[X];if(Y===G&&A===J)return}else W$[$]=[];W$[$].push([G,J])}function G0($,G,J,_,X){let A=$$[$][G];if(A)if(Array.isArray(A))for(let W=0;W<A.length;W++)A[W](J,_);else A(J,_);if(X)C$($)}function C$($){let G=W$[$];if(!G)return;for(let J=0;J<G.length;J++){let[_,X]=G[J];G0(_,X)}}function S0($,G){_0($$[c(this)],$,G)}function N0($,G){X0($$[c(this)],$,G)}var N$={$on:S0,$off:N0};function Q$($,G){if(!q$)return;Y$[q$].push($,G)}function w0(){Y$[++q$]=b$.pop()??[]}function P0($,G){let J=q$--,_=Y$[J],X=Z$[$],Y=X?.length;if(Y&&Y===_.length){let A=!0;for(let W=0;W<Y;W++){if(X[W]===_[W])continue;A=!1;break}if(A){Z$[$]=X,_.length=0,b$.push(_),Y$[J]=void 0;return}}J0(X,G);for(let A=0;A<_.length;A+=2)_0($$[_[A]],_[A+1],G);Z$[$]=_,Y$[J]=void 0}function J0($,G){if(!$)return;for(let J=0;J<$.length;J+=2)X0($$[$[J]],$[J+1],G);$.length=0,b$.push($)}function _0($,G,J){let _=$[G];if(!_){$[G]=J;return}if(Array.isArray(_)){if(!_.includes(J))_.push(J);return}if(_!==J)$[G]=[_,J]}function X0($,G,J){let _=$[G];if(!_)return;if(Array.isArray(_)){let X=_.indexOf(J);if(X<0)return;if(_.length===2){$[G]=_[X?0:1];return}_.splice(X,1);return}if(_===J)delete $[G]}function D$($,G){let J=++E0,_=typeof $==="number",X=V0(Y);function Y(){w0();let W=_?l[$]():$();return P0(J,X),G?G(W):W}let A=()=>{if(J0(Z$[J],X),Z$[J]=void 0,_)u($);X=null};if(!_)R0(A);if(_)u($,Y);return[Y(),A]}var _G=(async()=>{}).constructor;var L0={get($,G){return $[0]?.[G]},has($,G){return G in($[0]||{})},ownKeys($){return Reflect.ownKeys($[0]||{})},getOwnPropertyDescriptor($,G){let J=$[0];return J&&{configurable:!0,enumerable:!0,writable:!0,value:J[G]}},set($,G,J){return!!$[0]&&Reflect.set($[0],G,J)}};function g($){return!!$&&typeof $==="object"&&"h"in $}function Y0($,G,J){let _=a({0:$,1:G,2:J}),X=(Y,A)=>{let W=_[2]?.[Y];if(typeof W==="function")W(A)};return[new Proxy(_,L0),X,_]}var f0=null;function V$(){return f0?.()??null}function G$($,G){let J=V$();if(!J)return;let _=J.hooks.get($);if(_)_.push(G);else J.hooks.set($,[G])}function Z0($,G,J,_=new WeakSet){if(_.has(G))return;_.add(G);let X=G.ref;if(X.f)X.f=J.get(X.f)??X.f;if(X.l)X.l=J.get(X.l)??X.l;$.hooks.get(G)?.forEach((Y)=>Y(J,_))}var r=Symbol(),j$=-1,F$=[],y$=[],h$="¤",E$=`<!--${h$}-->`,j0=1024,W0=new WeakMap,g$=new WeakMap,O$=new Map,e=new Map,t,C0=0;F0(j0);function k($,G,J){let _=$.f;if(!G||!_)return;let X=$.l;while(!0){let Y=_===X?null:_.nextSibling;if(G.insertBefore(_,J||null),!Y)return;_=Y}}function v$($,G){return G.g===I$($).g}function I$($){let G=$._p;if(G)return G;return $._p=y0($._s)}function y0($,G){let J=document,_=G?void 0:g$.get($),X=_?.get(J);if(X)return X;let Y=$.join(E$),A=G?`${h$}${Y}`:Y,W=W0.get(J);if(!W)W={},W0.set(J,W);let M=W[A];if(M){if(!G)_??=new WeakMap,_.set(J,M),g$.set($,_);return M}let H=document.createElement("template");if(G){H.innerHTML=`<svg xmlns="http://www.w3.org/2000/svg">${Y}</svg>`;let v=H.content.firstChild;if(v){let z=H.content;while(v.firstChild)z.appendChild(v.firstChild);z.removeChild(v)}}else H.innerHTML=Y;let E=u0(H.content);a0(H.content);let I=$.length-1,R=0;for(let v=0;v<E[0].length;)v+=(E[0][v+1]??0)+3,R++;if(R!==I)throw Error("Invalid HTML position");let V={template:H,paths:E,g:A,expressions:I};if(!G)_??=new WeakMap,_.set(J,V),g$.set($,_);return W[A]=V,V}function d($,G,J=!1){if(G._t===$){G.k=$._k,G.i=$._i,$._h=G,$._m=J;return}if(G._t&&G._t!==$){let _=G._t;if(_._h===G)_._m=!1,_._h=void 0}G._t=$,G.k=$._k,G.i=$._i,$._h=G,$._m=J,r$($._a,G.e)}function o$($){let G=$._t;if(G._h===$)G._m=!1,G._h=void 0}function F0($){let G,J;for(let _=0;_<$;_++){let X={paths:[[],[]],dom:null,ref:{f:null,l:null},_t:null,e:-1,g:"",b:!1,r:!0,st:!1,u:null,v:null,s:void 0,k:void 0,i:void 0,bkn:void 0,next:void 0};if(J)J.next=X;else G=X;J=X}if(J)J.next=t;t=G}function g0($){$.next=t,t=$}function v0($,G,J){$.paths=G.paths,$.g=G.g,$.dom=G.template.content.cloneNode(!0),$.ref.f=$.dom.firstChild,$.ref.l=$.dom.lastChild,$.e=a$(G.expressions),$.b=$.st=!1,$.r=!0,$.u=$.v=null,$.s=$.bkn=void 0,d(J,$)}function m0($){let G=I$($),J=O$.get($._i);if(J){if(J.g!==G.g)throw Error("shape mismatch");if(J.r)return m$(J),d($,J),J}let X=e.get(G.g)?.h;if(X)return m$(X),d($,X),X;if(!t)F0(j0);let Y=t;return t=Y.next,Y.next=void 0,v0(Y,G,$),Y}function m$($){if(!$.st)return;let G=e.get($.g);if(G){let J,_=G.h;while(_&&_!==$)J=_,_=_.bkn;if(_){if(J)J.bkn=_.bkn;else G.h=_.bkn;if(!G.h)e.delete($.g)}}if($.i!==void 0&&O$.get($.i)===$)O$.delete($.i);$.st=!1,$.bkn=void 0}function R$($){let G=this[r]?.[$.type];if(!G)return;if(!G.c._t._m)return;l[G.p]?.($)}function M$($){return g($)?$.k:$._k}function s($,...G){let J=(_)=>h0(J,_);return J.isT=!0,J._a=G,J._c=c0,J._m=!1,J._s=$,J.key=s0,J.id=l0,J}function c0(){let $=this._h;if(!$)$=m0(this),this._h=$;return $}function s0($){if(this._k=$,this._h)this._h.k=$;return this}function l0($){if(this._i=$,this._h)this._h.i=$;return this}function h0($,G){let J=$._c();if(!$._m){if($._m=!0,!J.b)return o0(J,G);return k(J.ref,G??J.dom),G??J.dom}return k(J.ref,J.dom),G?G.appendChild(J.dom):J.dom}function o0($,G){let J=$.e,_=l[J],[X,Y]=$.paths,A=j$+1,W=0;y$[0]=$.dom;for(let H=0;H<_;H++){let E=X[W++],I=X[W++],R=E,V=y$[R];while(I--)V=V.childNodes[X[W++]],y$[++R]=V;F$[++j$]=V,F$[++j$]=X[W++]}let M=j$;for(let H=A,E=J+1;H<M;H++,E++){let I=F$[H],R=F$[++H];if(R)p0(I,Y[R-1],E,$);else k0(I,E,$)}return F$.length=A,j$=A-1,$.b=!0,G?G.appendChild($.dom)&&G:$.dom}function k0($,G,J){let _,X=l[G],Y=V$(),A=$.nodeType===3?$:null;if(g(X)||N(X)||Array.isArray(X)){J.r=!1;let W=z0(Y);if(_=W(X),Y)G$(J,(M,H)=>{W.adopt(M,H)})}else if(typeof X==="function"){let W=A,M=null,[H,E]=D$(G,(I)=>{if(!M){if(g(I)||N(I)||Array.isArray(I)){J.r=!1,M=z0(Y);let V=M(I);if(W)W.parentNode?.replaceChild(V,W),W=null;return V}if(!W)W=document.createTextNode("");let R=n(I);if(W.nodeValue!==R)W.nodeValue=R;return W}return M(I)});if((J.u??=[]).push(E),_=H,Y)G$(J,(I,R)=>{if(W){let V=I.get(W);if(V)W=V}M?.adopt(I,R)})}else{let W=A??document.createTextNode("");if(W.data=n(X),_=W,Y)u(G,(M)=>W.data=n(M)),G$(J,(M)=>{let H=M.get(W);if(H)W=H});else u(G,W)}if($===J.ref.f||$===J.ref.l){let W=_.nodeType===11?_.lastChild:_;if($===J.ref.f)J.ref.f=_.nodeType===11?_.firstChild:_;if($===J.ref.l)J.ref.l=W}if(_!==$)$.parentNode?.replaceChild(_,$)}function p0($,G,J,_){if($.nodeType!==1)return;let X=$,Y=l[J],A=V$();if(G[0]==="@"){let W=G.slice(1),M=X[r]??={};M[W]={c:_,p:J};let H=[X,W];if(X.addEventListener(W,R$),X.removeAttribute(G),(_.v??=[]).push(H),A)G$(_,(E)=>{let I=E.get(X);if(!I)return;let R=X,V=R[r];if(V){delete V[W];let z=!1;for(let Z in V){z=!0;break}if(!z)delete R[r]}X.removeEventListener(W,R$),X=I,H[0]=X;let v=X[r]??={};v[W]={c:_,p:J},X.addEventListener(W,R$),X.removeAttribute(G)})}else if(typeof Y==="function"&&!N(Y)){let[,W]=D$(J,(M)=>A$(X,G,M));if((_.u??=[]).push(W),A)G$(_,(M)=>{let H=M.get(X);if(H)X=H})}else if(A$(X,G,Y),A)u(J,(W)=>A$(X,G,W));else u(J,X,G)}function z0($){let G,J=Object.create(null),_=function(Z){if(!G){if(g(Z)){let[Q,q]=v(Z);return G=I(Q,q),Q}if(N(Z)){let Q=Z();return G=I(Q,Z._h),Q}if(Array.isArray(Z)){let[Q,q]=X(Z);return G=q,Q}return G=document.createTextNode(n(Z))}if(Array.isArray(Z))if(!Array.isArray(G)){let[Q,q]=X(Z);P(G).after(Q),V(G),o(G),G=q}else{let Q=0,q=Z.length,D=G.length;if(q&&D===1&&!m(G[0])&&!G[0].data){let[U,O]=X(Z);G[0].replaceWith(U),G=O;return}if(q===D){let U=Array(q);for(;Q<q;Q++){let O=Z[Q];if(g(O)&&O.k!==void 0||N(O)&&O._k!==void 0){Q=-1;break}let b=G[Q];if(N(O)&&m(b)&&b._t===O&&O._h===b&&O._m){U[Q]=b;continue}if(N(O)&&m(b)){let h=O,p=h._p??I$(h);if(b.g===p.g){d(h,b,!0),U[Q]=b;continue}}U[Q]=H(O,b)}if(Q===q){G=U;return}Q=0}let S=M(Z,G);if(S){G=S;return}if(q>D&&D){for(;Q<D;Q++){let U=Z[Q],O=G[Q];if(N(U)&&m(O)&&O._t===U&&U._h===O&&U._m)continue;Q=-1;break}if(Q===D){let U=document.createDocumentFragment(),O=G.slice();for(Q=D;Q<q;Q++)O[Q]=E(Z[Q],U);P(G[D-1]).after(U),G=O;return}Q=0}let T,C=[],L=++C0,x=q>D?document.createDocumentFragment():null;for(;Q<q;Q++){let U=Z[Q],O=G[Q],b;if(N(U)&&(b=U._k)!==void 0&&b in J){let p=J[b];if(v$(U,p))d(U,p,!0),U=p._t}if(Q>D-1){C[Q]=E(U,x);continue}if(N(U)&&m(O)&&O._t===U&&U._h===O&&U._m){T=P(O),C[Q]=O,O.mk=L;continue}let h=H(U,O,T);T=P(h),C[Q]=h,h.mk=L}if(!q){let U=C[0]=document.createTextNode(""),O=Q0(G),b=O&&A0(G,U);if(!b)P(G).after(U);if(J=Object.create(null),O)l$(G,b);else o(G);G=C;return}else if(q>D)T?.after(x);for(Q=0;Q<D;Q++){let U=G[Q];if(U.mk===L)continue;V(U),o(U)}G=C}else{if(Array.isArray(G))J=Object.create(null);G=H(Z,G)}};_.adopt=$?(z,Z)=>{G=O0(G,$,z,Z)}:()=>{};function X(z){let Z=document.createDocumentFragment();if(!z.length){let q=document.createTextNode("");return Z.appendChild(q),[Z,[q]]}let Q=Array(z.length);for(let q=0;q<z.length;q++)Q[q]=E(z[q],Z);return[Z,Q]}function Y(z,Z){if(Z.s?.[1]!==z.h)return!1;if(Z.s[0]!==z.p)Z.s[0]=z.p;if(Z.s[2]!==z.e)Z.s[2]=z.e;return!0}function A(z,Z){if(g(z))return Y(z,Z);if(!v$(z,Z))return!1;return d(z,Z,!0),!0}function W(z,Z,Q){if(Q){k(z.ref,Q.parentNode,Q.nextSibling);return}let q=P(Z,void 0,!0);k(z.ref,q.parentNode,q)}function M(z,Z){let Q=z.length,q=Z.length;if(!Q){let j=document.createTextNode(""),F=Q0(Z),B=F&&A0(Z,j);if(!B)P(Z).after(j);if(J=Object.create(null),F)l$(Z,B);else o(Z);return[j]}let D=Array(Q),S=P(Z[0]).parentNode;if(!S)return null;let T=0,C=Object.create(null);for(;T<q&&T<Q;T++){let j=Z[T];if(!m(j)||j.k===void 0)return null;let F=z[T];if(!g(F)&&!N(F))return null;let B=M$(F);if(B===void 0||B!==j.k)break;if(C[B]=1,!(N(F)&&j._t===F&&F._h===j&&F._m)&&!A(F,j))return null;D[T]=j}if(T===q){if(T===Q)return D;let j=document.createDocumentFragment();for(let F=T;F<Q;F++){let B=z[F];if(!g(B)&&!N(B))return null;let y=M$(B);if(y===void 0||y in C)return null;C[y]=1,D[F]=E(B,j)}return S.insertBefore(j,q?P(Z[q-1]).nextSibling:null),D}if(T===Q){for(let j=T;j<q;j++){let F=Z[j];V(F),o(F)}return D}let L=T,x=T,U=q-1,O=Q-1;while(L<=U&&x<=O){let j=Z[L],F=Z[U],B=j.k,y=F.k,K=z[x],f=z[O],K$=g(K)||N(K)?M$(K):void 0,T$=g(f)||N(f)?M$(f):void 0;if(K$===void 0||T$===void 0)return null;if(B===K$){if(!(N(K)&&j._t===K&&K._h===j&&K._m)&&!A(K,j))return null;D[x++]=j,L++;continue}if(y===T$){if(!(N(f)&&F._t===f&&f._h===F&&f._m)&&!A(f,F))return null;D[O--]=F,U--;continue}if(B===T$){if(!(N(f)&&j._t===f&&f._h===j&&f._m)&&!A(f,j))return null;k(j.ref,S,P(F).nextSibling),D[O--]=j,L++;continue}if(y===K$){if(!(N(K)&&F._t===K&&K._h===F&&K._m)&&!A(K,F))return null;k(F.ref,S,P(j,void 0,!0)),D[x++]=F,U--;continue}break}if(x>O){for(let j=L;j<=U;j++){let F=Z[j];V(F),o(F)}return D}if(L>U){let j=document.createDocumentFragment();for(let F=x;F<=O;F++){let B=z[F];if(!g(B)&&!N(B))return null;D[F]=E(B,j)}return S.insertBefore(j,O+1<Q?P(D[O+1],void 0,!0):null),D}let b=Object.create(null);for(let j=L;j<=U;j++){let F=Z[j];if(!m(F)||F.k===void 0)return null;let B=F.k;if(B in b)return null;b[B]=j+1}let h=Object.create(null),p=0;for(let j=x;j<=O;j++){let F=z[j],B=g(F)||N(F)?M$(F):void 0;if(B===void 0||B in h)return null;if(h[B]=j+1,B in b)p++}if(!p){let j=P(Z[L],void 0,!0),F=P(Z[U]),B=document.createDocumentFragment();for(let K=x;K<=O;K++){let f=z[K];if(!g(f)&&!N(f))return null;D[K]=E(f,B)}let y=j.parentNode;if(y&&j===y.firstChild&&F===y.lastChild)y.replaceChildren(B);else{let K=document.createRange();K.setStartBefore(j),K.setEndAfter(F),K.deleteContents(),K.insertNode(B)}for(let K=L;K<=U;K++){let f=Z[K];V(f),c$(f,!0)}return D}for(let j=L;j<=U;j++){let F=Z[j],B=h[F.k];if(B===void 0){V(F),o(F);continue}let y=z[B-1];if(!A(y,F))return null;D[B-1]=F}let _$=O+1<Q?P(D[O+1],void 0,!0):P(Z[q-1]).nextSibling;for(let j=O;j>=x;j--){let F=D[j];if(!F){let y=z[j];if(!g(y)&&!N(y))return null;let K=document.createDocumentFragment(),f=E(y,K);D[j]=f,S.insertBefore(K,_$),_$=P(f,void 0,!0);continue}let B=P(F,void 0,!0);if(B.parentNode!==S||B.nextSibling!==_$)k(F.ref,S,_$);_$=B}return D}function H(z,Z,Q){let q=Z.nodeType??0;if(g(z)){let S=z.k;if(S!==void 0&&S in J){let x=J[S];if(Y(z,x)){if(x===Z)return Z;return W(x,Z,Q),x}}else if(m(Z)&&Y(z,Z)){if(Z.k!==z.k)V(Z),Z.k=z.k,R(Z);return Z}let[T,C]=v(z),L=I(T,C);return P(Z,Q).after(T),V(Z),o(Z),R(C),L}if(!N(z)&&q===3){let S=n(z);if(Z.data!==S)Z.data=S;return Z}if(N(z)){let S=z,T=S._k;if(T!==void 0&&T in J){let O=J[T];if(v$(S,O)){if(d(S,O,!0),O===Z)return Z;return W(O,Z,Q),O}}let C=I$(S);if(m(Z)&&Z.g===C.g)return d(S,Z,!0),Z;let L=z(),x=S._h,U=I(L,x);return P(Z,Q).after(L),V(Z),o(Z),R(x),U}let D=document.createTextNode(n(z));return P(Z,Q).after(D),V(Z),o(Z),D}function E(z,Z){if(g(z)){let[q,D]=v(z);return Z.appendChild(q),R(D),I(Z,D)}if(N(z)){z(Z);let q=z._h;return R(q),I(Z,q)}let Q=document.createTextNode(n(z));return Z.appendChild(Q),Q}function I(z,Z){if(Z.ref.f)return Z;let Q=document.createTextNode("");return z.appendChild(Q),Q}function R(z){if(z.k!==void 0)J[z.k]=z}function V(z){if(m(z)&&z.k!==void 0&&J[z.k]===z)delete J[z.k]}function v(z){let[Z,Q,q]=Y0(z.p,z.h,z.e),D=[],S=L$(D),T,C;try{T=z.h(Z,Q),C=T()}finally{L$(S)}let L=T._c();if(D.length)(L.u??=[]).push(...D);return L.r=!1,L.s=q,L.k=z.k,[C,L]}return _}var B$=[];function c$($,G=!1){if($.st)m$($);if(o$($),$.v)for(let _=0;_<$.v.length;_++){let[X,Y]=$.v[_],A=X[r];if(A){delete A[Y];let W=!1;for(let M in A){W=!0;break}if(!W)delete X[r]}X.removeEventListener(Y,R$)}if($.u){for(let _=0;_<$.u.length;_++)$.u[_]();$.u=null}if($.e+1)n$($.e),$.e=-1;let J=$.ref.f;if(!G&&J){let _=$.ref.l;if(J===_)J.remove();else while(J){let X=J===_?null:J.nextSibling;if(J.remove(),!X)break;J=X}}$.dom.textContent="",$.ref.f=$.ref.l=null,$.k=$.i=$.s=void 0,$.u=$.v=null,$.b=$.st=!1,$.r=!0,$.g="",g0($)}function d0($,G=!1){if(!G)k($.ref,$.dom);if(o$($),$.st||!$.r)return;$.st=!0;let J=e.get($.g);if(!J)J={},e.set($.g,J);if($.bkn=J.h,J.h=$,$.i!==void 0)O$.set($.i,$)}var s$=!1;function Q0($){for(let G=0;G<$.length;G++){let J=$[G];if(m(J)&&!J.r)return!1}return!0}function A0($,G){if(!$.length)return!1;let J=P($[0],void 0,!0),_=P($[$.length-1]),X=J.parentNode;if(!X||J!==X.firstChild||_!==X.lastChild)return!1;return X.replaceChildren(G),!0}function l$($,G=!1){if(m($)){if($.r)d0($,G);else c$($,G);return}if(Array.isArray($)){if(!G&&$.length){let X=P($[0],void 0,!0),Y=P($[$.length-1]),A=X.parentNode;if(A){if(X===A.firstChild&&Y===A.lastChild)A.textContent="";else{let W=document.createRange();W.setStartBefore(X),W.setEndAfter(Y),W.deleteContents()}G=!0}}let J,_="";for(let X=0;X<$.length;X++){let Y=$[X];if(m(Y)){if(!Y.r){c$(Y,G);continue}if(!G)k(Y.ref,Y.dom);if(o$(Y),Y.st)continue;if(Y.st=!0,_!==Y.g){if(_=Y.g,J=e.get(_),!J)J={},e.set(_,J)}if(Y.bkn=J.h,J.h=Y,Y.i!==void 0)O$.set(Y.i,Y)}else if(!G)Y.remove()}return}if(!G)$.remove()}function i0(){s$=!1;let $=B$;B$=[];for(let G=0;G<$.length;G++)l$($[G]);if(B$.length)M0()}function M0(){if(s$)return;s$=!0,queueMicrotask(i0)}function o($){if(!$)return;B$.push($),M0()}function n($){return $||$===0?$:""}function P($,G,J){if(m($))return J?$.ref.f:$.ref.l;if(Array.isArray($))return P($[J?0:$.length-1],G,J);return $}function O0($,G,J,_){if(!$)return $;if(m($))return Z0(G,$,J,_),$;if(Array.isArray($)){let X=Array($.length);for(let Y=0;Y<$.length;Y++)X[Y]=O0($[Y],G,J,_);return X}return J.get($)??$}function u0($){let G=[],J=[],_=[],X=[],Y=(M)=>{let H=_.length,E=X.length,I=H<E?H:E,R=0;while(R<I&&X[R]===_[R])R++;G.push(R,H-R);for(let V=R;V<H;V++)G.push(_[V]);G.push(M?J.push(M):0),X.length=H;for(let V=0;V<H;V++)X[V]=_[V]},A=(M)=>{if(M.nodeType===1){let E=M.attributes;for(let I=0;I<E.length;I++){let R=E[I];if(R.value===E$)Y(R.name)}}else if(M.nodeType===8)Y();else if(M.nodeType===3&&M.nodeValue===E$)Y();let H=M.childNodes;for(let E=0;E<H.length;E++)_.push(E),A(H[E]),_.pop()},W=$.childNodes;for(let M=0;M<W.length;M++)_.push(M),A(W[M]),_.pop();return[G,J]}function a0($){let G=(J)=>{let _=J.childNodes;for(let X=0;X<_.length;X++){let Y=_[X];if(Y.nodeType===8&&Y.data===h$){J.replaceChild(document.createTextNode(""),Y);continue}if(Y.nodeType===3&&Y.nodeValue===E$)Y.nodeValue="";if(Y.firstChild)G(Y)}};G($)}async function U0(){try{let G=await(await fetch("/api/health")).json();return G.status==="healthy"?"ok":G.status==="degraded"?"degraded":"err"}catch{return"err"}}async function*q0($){let G=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:$})});if(!G.ok){yield{type:"error",error:await G.text()};return}let J=G.body.getReader(),_=new TextDecoder,X="";while(!0){let{done:Y,value:A}=await J.read();if(Y)break;X+=_.decode(A,{stream:!0});let W=X.split(`
+`);X=W.pop();for(let M of W){if(!M.trim())continue;try{yield JSON.parse(M)}catch{}}}if(X.trim())try{yield JSON.parse(X)}catch{}}var w=a({tab:"ai",messages:[],input:"",sending:!1,serverStatus:"loading",services:{}}),r0=[{id:"ai",label:"AI"},{id:"encyclopedia",label:"Encyclopedia"},{id:"maps",label:"Maps"},{id:"movies",label:"Movies"},{id:"music",label:"Music"},{id:"books",label:"Books"},{id:"games",label:"Games"}];async function H0(){w.serverStatus=await U0()}H0();setInterval(H0,30000);async function D0(){let $=w.input.trim();if(!$||w.sending)return;w.messages.push({role:"user",content:$}),w.input="",w.sending=!0;let G={role:"assistant",content:"",sources:[]};w.messages.push(G);try{for await(let J of q0($)){switch(J.type){case"sources":if(J.sources)G.sources=J.sources;break;case"token":if(J.content)G.content+=J.content;break;case"error":G.content=`Error: ${J.error}`,G.role="error";break}w.messages=[...w.messages]}}catch(J){G.content=`Connection error: ${J.message}`,G.role="error",w.messages=[...w.messages]}w.sending=!1}function n0($){let G=$;if(G.key==="Enter"&&!G.shiftKey)G.preventDefault(),D0()}function t0($){if(!$||$.length===0)return s`<span></span>`;return s`
     <div class="sources">
       <div class="sources-header">Sources</div>
-      ${sources.map((s, i) => html`
+      ${$.map((G,J)=>s`
         <div class="source">
-          <div class="source-label">[${i + 1}] ${s.source_file}${s.page ? ` — p.${s.page}` : ''}</div>
-          <div class="source-text">${s.text}</div>
+          <div class="source-label">[${J+1}] ${G.source_file}${G.page?` — p.${G.page}`:""}</div>
+          <div class="source-text">${G.text}</div>
         </div>
       `)}
     </div>
-  `
-}
-
-function renderMessage(m) {
-  if (m.role === 'user') {
-    return html`<div class="message user">${m.content}</div>`
-  }
-  if (m.role === 'error') {
-    return html`<div class="message error">${m.content}</div>`
-  }
-  // assistant
-  return html`
+  `}function e0($){if($.role==="user")return s`<div class="message user">${$.content}</div>`;if($.role==="error")return s`<div class="message error">${$.content}</div>`;return s`
     <div class="message assistant">
-      <div class="message-text">${m.content}</div>
-      ${renderSources(m.sources)}
+      <div class="message-text">${$.content}</div>
+      ${t0($.sources)}
     </div>
-  `
-}
-
-// -- Tab content --
-function aiTab() {
-  return html`
+  `}function $G(){return s`
     <div class="chat-container">
       <div class="chat-messages" id="chat-messages">
-        ${() => state.messages.length === 0
-          ? html`<div class="placeholder">Ask anything</div>`
-          : html`<div>${() => state.messages.map(m => renderMessage(m))}</div>`
-        }
+        ${()=>w.messages.length===0?s`<div class="placeholder">Ask anything</div>`:s`<div>${()=>w.messages.map(($)=>e0($))}</div>`}
       </div>
       <div class="chat-input-area">
         <input
           class="chat-input"
           type="text"
           placeholder="Type a message..."
-          value="${() => state.input}"
-          @input="${(e) => { state.input = e.target.value }}"
-          @keydown="${handleKeydown}"
-          .disabled="${() => state.sending}"
+          value="${()=>w.input}"
+          @input="${($)=>{w.input=$.target.value}}"
+          @keydown="${n0}"
+          .disabled="${()=>w.sending}"
         />
         <button
           class="send-btn"
-          @click="${sendMessage}"
-          .disabled="${() => state.sending || !state.input.trim()}"
+          @click="${D0}"
+          .disabled="${()=>w.sending||!w.input.trim()}"
         >
-          ${() => state.sending ? '...' : 'Send'}
+          ${()=>w.sending?"...":"Send"}
         </button>
       </div>
     </div>
-  `
-}
-
-function placeholderTab(name) {
-  return () => html`<div class="placeholder">${name} — coming soon</div>`
-}
-
-const tabContent = {
-  ai: aiTab,
-  encyclopedia: placeholderTab('Encyclopedia'),
-  maps: placeholderTab('Maps'),
-  movies: placeholderTab('Movies'),
-  music: placeholderTab('Music'),
-  books: placeholderTab('Books'),
-  games: placeholderTab('Games'),
-}
-
-// -- App shell --
-const app = html`
+  `}function J$($){return()=>s`<div class="placeholder">${$} — coming soon</div>`}var GG={ai:$G,encyclopedia:J$("Encyclopedia"),maps:J$("Maps"),movies:J$("Movies"),music:J$("Music"),books:J$("Books"),games:J$("Games")},JG=s`
   <div class="crt-frame">
     <div class="crt-scanlines"></div>
     <div class="crt-glow"></div>
@@ -210,27 +47,22 @@ const app = html`
         <div class="header">
           <h1>Faraday-OS</h1>
           <div class="status">
-            <span class="status-dot ${() => state.serverStatus}"></span>
-            ${() => state.serverStatus === 'ok' ? 'Systems online'
-                  : state.serverStatus === 'degraded' ? 'Degraded'
-                  : state.serverStatus === 'loading' ? 'Connecting...'
-                  : 'Offline'}
+            <span class="status-dot ${()=>w.serverStatus}"></span>
+            ${()=>w.serverStatus==="ok"?"Systems online":w.serverStatus==="degraded"?"Degraded":w.serverStatus==="loading"?"Connecting...":"Offline"}
           </div>
         </div>
         <div class="tabs">
-          ${() => tabs.map(t => html`
+          ${()=>r0.map(($)=>s`
             <button
-              class="tab ${() => state.tab === t.id ? 'active' : ''}"
-              @click="${() => { state.tab = t.id }}"
-            >${t.label}</button>
+              class="tab ${()=>w.tab===$.id?"active":""}"
+              @click="${()=>{w.tab=$.id}}"
+            >${$.label}</button>
           `)}
         </div>
         <div class="content">
-          ${() => tabContent[state.tab]()}
+          ${()=>GG[w.tab]()}
         </div>
       </div>
     </div>
   </div>
-`
-
-app(document.getElementById('app'))
+`;JG(document.getElementById("app"));

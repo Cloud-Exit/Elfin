@@ -29,14 +29,14 @@ type Config struct {
 
 func loadConfig() Config {
 	return Config{
-		Port:       envOr("FARADAY_PORT", "8080"),
+		Port:       envOr("LEFIN_PORT", "8080"),
 		LlamaURL:   envOr("LLAMA_URL", "http://localhost:8081"),
 		EmbedURL:   envOr("EMBED_URL", "http://localhost:8082"),
 		QdrantURL:  envOr("QDRANT_URL", "http://localhost:6333"),
 		StaticDir:  envOr("STATIC_DIR", "./static"),
-		Model:      envOr("FARADAY_MODEL", "gemma-4-e4b"),
-		EmbedModel: envOr("FARADAY_EMBED_MODEL", "nomic-embed-text"),
-		Collection: envOr("FARADAY_COLLECTION", "faraday_docs"),
+		Model:      envOr("LEFIN_MODEL", "gemma-4-e4b"),
+		EmbedModel: envOr("LEFIN_EMBED_MODEL", "nomic-embed-text"),
+		Collection: envOr("LEFIN_COLLECTION", "faraday_docs"),
 	}
 }
 
