@@ -1,5 +1,5 @@
 import { resolve, join, extname } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 
 const PORT = Number(process.env.LEFIN_PORT ?? 8085)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
@@ -23,7 +23,7 @@ function serveStatic(path: string): Response | null {
   // Prevent directory traversal
   if (!filePath.startsWith(STATIC_DIR)) return null
 
-  if (!existsSync(filePath)) return null
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) return null
 
   const file = Bun.file(filePath)
   const ext = extname(filePath)
