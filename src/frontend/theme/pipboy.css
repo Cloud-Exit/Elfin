@@ -268,3 +268,83 @@ input::placeholder,
 textarea::placeholder {
   color: rgba(var(--main), 0.25);
 }
+
+/* ===== Layout helpers ===== */
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+/* ===== Section headers ===== */
+.section-header {
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-size: 10px;
+  color: rgba(var(--main), 0.5);
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid rgba(var(--main), 0.15);
+}
+
+.section-label {
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 11px;
+}
+
+/* ===== Stat bars ===== */
+.stat-bar-bg {
+  background: rgba(var(--alt), 0.2);
+  height: 14px;
+  position: relative;
+}
+
+.stat-bar-fill {
+  height: 100%;
+  background: rgb(var(--main));
+  box-shadow: 0 0 8px rgba(var(--main), 0.4);
+  transition: width 0.3s ease;
+}
+
+/* ===== Info rows ===== */
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(var(--main), 0.1);
+  font-size: 12px;
+}
+
+.info-label {
+  color: rgba(var(--main), 0.5);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* ===== Cards ===== */
+.card {
+  padding: 12px;
+  border: 1px solid rgba(var(--main), 0.2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ===== Journal rows ===== */
+.journal-row {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(var(--main), 0.08);
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.journal-date {
+  color: rgba(var(--main), 0.4);
+  min-width: 90px;
+}
+
+/* ===== Text utilities ===== */
+.text-dim {
+  color: rgba(var(--main), 0.7);
+}
