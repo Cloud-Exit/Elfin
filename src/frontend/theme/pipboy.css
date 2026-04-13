@@ -1,5 +1,4 @@
-/* LefinOS — Pip-Boy / Fallout Terminal Theme */
-@import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;700&display=swap');
+/* Elfin — Pip-Boy / Fallout Terminal Theme */
 
 * {
   margin: 0;
@@ -29,7 +28,7 @@
 body {
   background: black;
   color: rgb(var(--main));
-  font-family: "Roboto Mono", monospace;
+  font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   height: 100vh;
   overflow: hidden;

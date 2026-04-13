@@ -1,12 +1,12 @@
 {
-  "name": "lefin-os",
+  "name": "elfin",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/backend/server.ts",
     "build": "bun build src/frontend/main.tsx --outdir static/dist --minify",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bunx tsc --noEmit",
     "db:generate": "bunx prisma generate",
     "db:migrate": "bunx prisma migrate dev",
     "db:push": "bunx prisma db push"

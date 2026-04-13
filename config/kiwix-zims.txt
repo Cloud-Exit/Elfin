@@ -1,0 +1,10 @@
+# Required Kiwix archives for Elfin.
+# Format:
+#   <catalog-name>
+#   <catalog-name>|<flavour>
+# The download script resolves newest matching artifact from Kiwix OPDS catalog.
+
+wikipedia_en_all|nopic
+wikipedia_es_all|nopic
+wikipedia_en_medicine|nopic
+stackoverflow.com_en_all

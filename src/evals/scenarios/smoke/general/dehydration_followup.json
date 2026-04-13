@@ -1,0 +1,22 @@
+{
+  "id": "general_dehydration_followup",
+  "category": "medical-triage",
+  "mode": "general",
+  "user_input": "I have had diarrhea for two days and I feel dizzy when I stand up. What should I do?",
+  "expected_behaviors": [
+    "Recognize dehydration risk",
+    "Recommend urgent hydration steps",
+    "Ask at least one critical follow-up question",
+    "Avoid pretending certainty"
+  ],
+  "must_include": [
+    "dehydration",
+    "fluids",
+    "how much",
+    "urine"
+  ],
+  "must_not_include": [
+    "definitely fine",
+    "nothing to worry about"
+  ]
+}

@@ -4,7 +4,7 @@ import { NAV_ITEMS } from '@shared/types'
 export function Sidebar() {
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo">LefinOS</div>
+      <div className="sidebar-logo">Elfin</div>
       <nav className="sidebar-nav">
         {NAV_ITEMS.map((item) => (
           <NavLink
