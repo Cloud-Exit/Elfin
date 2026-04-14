@@ -111,7 +111,7 @@ def run_pipeline(py: str, report_out: str, source_dir: str, qdrant_url: str, emb
 def main() -> int:
     parser = argparse.ArgumentParser(description="Smoke test live ingestion pipeline")
     parser.add_argument("--python", default=sys.executable or "python3", help="Python interpreter for pipeline run")
-    parser.add_argument("--source-dir", default="./datasets/raw", help="Directory containing raw docs")
+    parser.add_argument("--source-dir", default="./data/datasets/raw", help="Directory containing raw docs")
     parser.add_argument("--embed-url", default="http://localhost:8082", help="llama-embed base URL")
     parser.add_argument("--qdrant-url", default="http://localhost:6333", help="Qdrant base URL")
     parser.add_argument("--report-out", default="./data/ingestion/live-smoke-report.json", help="Report path")

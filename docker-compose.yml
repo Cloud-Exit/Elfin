@@ -33,7 +33,7 @@ services:
 
   # Vector database (on-disk storage mode)
   qdrant:
-    image: qdrant/qdrant:latest@sha256:94728574965d17c6485dd361aa3c0818b325b9016dac5ea6afec7b4b2700865f
+    image: docker.io/qdrant/qdrant:latest@sha256:94728574965d17c6485dd361aa3c0818b325b9016dac5ea6afec7b4b2700865f
     ports:
       - "6333:6333"
     volumes:
@@ -46,8 +46,8 @@ services:
   kiwix:
     image: ghcr.io/kiwix/kiwix-serve:latest@sha256:0b6541355b250c6b45d2d7725e88f22f1d6a0f45ad9480d9c0bd4bc58436a12f
     ports:
-      - "8083:80"
+      - "8083:8080"
     volumes:
-      - ./datasets/zim:/data:ro
+      - ./data/datasets/zim:/data:ro
     command: /data/*.zim
     restart: unless-stopped

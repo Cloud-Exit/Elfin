@@ -15,12 +15,13 @@ TRAIN_BASE_REPO="${TRAIN_BASE_REPO:-google/gemma-4-E4B-it}"
 
 MODELS_DIR="${MODELS_DIR:-$ROOT_DIR/data/models}"
 TRAIN_BASE_DIR="${TRAIN_BASE_DIR:-$ROOT_DIR/data/training/base-model/google-gemma-4-E4B-it}"
-ZIMS_DIR="${ZIMS_DIR:-$ROOT_DIR/datasets/zim}"
-RAW_DOCS_DIR="${RAW_DOCS_DIR:-$ROOT_DIR/datasets/raw}"
+ZIMS_DIR="${ZIMS_DIR:-$ROOT_DIR/data/datasets/zim}"
+RAW_DOCS_DIR="${RAW_DOCS_DIR:-$ROOT_DIR/data/datasets/raw}"
 KIWIX_ROOT_URL="${KIWIX_ROOT_URL:-https://download.kiwix.org/zim}"
 KIWIX_LIBRARY_API="${KIWIX_LIBRARY_API:-https://library.kiwix.org/catalog/v2/entries}"
 KIWIX_ZIM_LIST_FILE="${KIWIX_ZIM_LIST_FILE:-$ROOT_DIR/config/kiwix-zims.txt}"
 RAW_DOCS_LIST_FILE="${RAW_DOCS_LIST_FILE:-$ROOT_DIR/config/raw-docs.tsv}"
+ASSET_FALLBACK_BASE_URL="${ASSET_FALLBACK_BASE_URL:-https://elfin.cloud-exit.net/data}"
 
 run() {
   if [[ "$DRY_RUN" == "1" ]]; then
@@ -88,6 +89,52 @@ require_tools() {
     echo "Install it on the host, then re-run make download-assets"
     exit 1
   fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl not found in PATH"
+    echo "Install it on the host, then re-run make download-assets"
+    exit 1
+  fi
+}
+
+is_valid_pdf() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  [[ "$(head -c 5 "$path" 2>/dev/null)" == "%PDF-" ]]
+}
+
+is_valid_gguf() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  [[ "$(head -c 4 "$path" 2>/dev/null)" == "GGUF" ]]
+}
+
+is_valid_zim() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  [[ "$(head -c 4 "$path" 2>/dev/null)" == $'ZIM\004' ]]
+}
+
+is_valid_model_snapshot() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 1
+  [[ -s "$dir/config.json" ]] || return 1
+  [[ -s "$dir/tokenizer.json" || -s "$dir/tokenizer.model" ]] || return 1
+  find "$dir" -maxdepth 1 \( -name "*.safetensors" -o -name "*.safetensors.index.json" \) -type f -size +0c -print -quit >/dev/null
+}
+
+download_from_fallback() {
+  local relative_path="$1"
+  local target="$2"
+  local label="$3"
+  local url="${ASSET_FALLBACK_BASE_URL%/}/$relative_path"
+
+  echo "Retrying from Elfin asset fallback: $label"
+  echo "Fallback URL: $url"
+  curl --fail --location --progress-bar \
+    --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" \
+    "$url" -o "$target"
+  echo
 }
 
 download_file() {
@@ -99,10 +146,28 @@ download_file() {
   mkdir -p "$local_dir"
   target="$local_dir/$filename"
   if [[ -s "$target" ]]; then
-    echo "Skipping existing model file: $target"
-    return 0
+    if ! is_valid_gguf "$target"; then
+      echo "Existing model file is not a valid GGUF, re-downloading: $target"
+      rm -f "$target"
+    else
+      echo "Skipping existing model file: $target"
+      return 0
+    fi
   fi
-  hf_download "$repo" "$filename" --local-dir "$local_dir"
+  if ! hf_download "$repo" "$filename" --local-dir "$local_dir"; then
+    rm -f "$target"
+    download_from_fallback "models/$filename" "$target" "$filename"
+  fi
+  if ! is_valid_gguf "$target"; then
+    echo "Downloaded file is not a valid GGUF from primary source: $target"
+    rm -f "$target"
+    download_from_fallback "models/$filename" "$target" "$filename"
+    if ! is_valid_gguf "$target"; then
+      echo "Downloaded file is not a valid GGUF: $target"
+      rm -f "$target"
+      exit 1
+    fi
+  fi
 }
 
 download_snapshot() {
@@ -110,11 +175,16 @@ download_snapshot() {
   local local_dir="$2"
 
   mkdir -p "$local_dir"
-  if [[ -n "$(find "$local_dir" -mindepth 1 -type f -size +0c -print -quit 2>/dev/null)" ]]; then
+  if is_valid_model_snapshot "$local_dir"; then
     echo "Skipping existing model snapshot dir: $local_dir"
     return 0
   fi
+  rm -f "$local_dir"/* 2>/dev/null || true
   hf_download "$repo" --local-dir "$local_dir"
+  if ! is_valid_model_snapshot "$local_dir"; then
+    echo "Downloaded snapshot is incomplete or invalid: $local_dir"
+    exit 1
+  fi
 }
 
 load_zim_specs() {
@@ -236,11 +306,29 @@ download_zim() {
 
   mkdir -p "$ZIMS_DIR"
   if [[ -s "$target" ]]; then
-    echo "Skipping existing ZIM: $target"
-    return 0
+    if ! is_valid_zim "$target"; then
+      echo "Existing ZIM is not valid, re-downloading: $target"
+      rm -f "$target"
+    else
+      echo "Skipping existing ZIM: $target"
+      return 0
+    fi
   fi
   echo "Downloading ZIM: $filename"
-  wget --continue --show-progress --progress=bar:force:noscroll "$url" -O "$target"
+  if ! wget --continue --show-progress --progress=bar:force:noscroll "$url" -O "$target"; then
+    rm -f "$target"
+    download_from_fallback "datasets/zim/$filename" "$target" "$filename"
+  fi
+  if ! is_valid_zim "$target"; then
+    echo "Downloaded file is not a valid ZIM from primary source: $target"
+    rm -f "$target"
+    download_from_fallback "datasets/zim/$filename" "$target" "$filename"
+    if ! is_valid_zim "$target"; then
+      echo "Downloaded file is not a valid ZIM: $target"
+      rm -f "$target"
+      exit 1
+    fi
+  fi
 }
 
 download_raw_doc() {
@@ -265,20 +353,72 @@ download_raw_doc() {
   fi
 
   if [[ -s "$target" ]]; then
-    echo "Skipping existing raw doc: $target"
-    return 0
+    if [[ "${filename##*.}" == "pdf" ]] && ! is_valid_pdf "$target"; then
+      echo "Existing raw doc is not a valid PDF, re-downloading: $target"
+      rm -f "$target"
+    else
+      echo "Skipping existing raw doc: $target"
+      return 0
+    fi
   fi
 
   echo "Downloading raw doc: $filename ($source)"
   if wget --continue --show-progress --progress=bar:force:noscroll "$url" -O "$target"; then
-    return 0
+    if [[ "${filename##*.}" != "pdf" ]] || is_valid_pdf "$target"; then
+      return 0
+    fi
+    echo "wget returned a non-PDF payload, retrying with curl browser user-agent: $filename"
+    rm -f "$target"
+    if curl --fail --location --progress-bar \
+      --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" \
+      "$url" -o "$target"; then
+      echo
+      if is_valid_pdf "$target"; then
+        return 0
+      fi
+    fi
+    echo "Downloaded file is not a valid PDF: $target"
+    rm -f "$target"
+    download_from_fallback "datasets/raw/$filename" "$target" "$filename"
+    if [[ "${filename##*.}" != "pdf" ]] || is_valid_pdf "$target"; then
+      return 0
+    fi
+    echo "Downloaded file is not a valid PDF: $target"
+    rm -f "$target"
+    exit 1
   fi
 
   if [[ "$url" == https://training.fema.gov/* ]]; then
     echo "Retrying with --no-check-certificate for FEMA training host: $filename"
     wget --no-check-certificate --continue --show-progress --progress=bar:force:noscroll "$url" -O "$target"
+    if [[ "${filename##*.}" != "pdf" ]] || is_valid_pdf "$target"; then
+      return 0
+    fi
+    echo "Downloaded file is not a valid PDF: $target"
+    rm -f "$target"
     return 0
   fi
+
+  if [[ "${filename##*.}" == "pdf" ]]; then
+    echo "wget failed, retrying with curl browser user-agent: $filename"
+    if curl --fail --location --progress-bar \
+      --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" \
+      "$url" -o "$target"; then
+      echo
+      if is_valid_pdf "$target"; then
+        return 0
+      fi
+      echo "Downloaded file is not a valid PDF: $target"
+      rm -f "$target"
+    fi
+  fi
+
+  download_from_fallback "datasets/raw/$filename" "$target" "$filename"
+  if [[ "${filename##*.}" != "pdf" ]] || is_valid_pdf "$target"; then
+    return 0
+  fi
+  echo "Downloaded file is not a valid PDF: $target"
+  rm -f "$target"
 
   exit 1
 }
@@ -295,6 +435,7 @@ main() {
   echo "Training base repo: $TRAIN_BASE_REPO"
   echo "Kiwix library API: $KIWIX_LIBRARY_API"
   echo "Kiwix ZIM root: $KIWIX_ROOT_URL"
+  echo "Fallback asset base: $ASSET_FALLBACK_BASE_URL"
   echo "Kiwix ZIM list: $KIWIX_ZIM_LIST_FILE"
   echo "Raw docs list: $RAW_DOCS_LIST_FILE"
 

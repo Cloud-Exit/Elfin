@@ -1,7 +1,16 @@
 # category	filename	url	source
 preparedness	ready_emergency_supply_list.pdf	https://www.ready.gov/sites/default/files/2022-04/ready_checklist.pdf	Ready.gov
 preparedness	ready_family_communication_plan.pdf	https://www.ready.gov/sites/default/files/2025-06/family-communication-plan_fillable-card.pdf	Ready.gov
-medical	who_psychological_first_aid_guide.pdf	https://apps.who.int/iris/bitstream/handle/10665/44615/9789241548205_eng.pdf?sequence=1	WHO
+medical	who_psychological_first_aid_guide.pdf	https://iris.who.int/bitstream/handle/10665/44615/9789241548205_eng.pdf	WHO
 water	cdc_make_water_safe_during_emergency.pdf	https://www.cdc.gov/water-emergency/media/pdfs/make-water-safe-during-emergency-p.pdf	CDC
 water	epa_emergency_disinfection_of_drinking_water.pdf	https://www.epa.gov/sites/default/files/2015-11/documents/epa816f15003.pdf	EPA
 preparedness	fema_is240b_instruction_guide_complete.pdf	https://training.fema.gov/EMIWeb/IS/IS240b/IG%20Files/IG_COMPLETE.pdf	FEMA EMI
+medical	cdc_emergency_wound_care_after_disaster.pdf	https://stacks.cdc.gov/view/cdc/49402/cdc_49402_DS1.pdf	CDC STACKS
+medical	cdc_heat_stress_first_aid_for_heat_illness.pdf	https://stacks.cdc.gov/view/cdc/138337/cdc_138337_DS1.pdf	CDC STACKS
+sanitation	cdc_preventing_diarrheal_illness_after_disaster.pdf	https://stacks.cdc.gov/view/cdc/158984/cdc_158984_DS1.pdf	CDC STACKS
+medical	tccc_module_17_fractures_splinting.pdf	https://tccc.org.ua/files/downloads/module-17-fractures-splinting-en.pdf	TCCC Ukraine
+medical	tccc_module_16_burn_treatment.pdf	https://tccc.org.ua/files/downloads/module-16-burns-en.pdf	TCCC Ukraine
+medical	tccc_burn_wound_management_pfc.pdf	https://tccc.org.ua/files/downloads/burn-wound-management-under-prolonged-field-care-pcc-en.pdf	TCCC Ukraine
+medical	tccc_crush_syndrome_pfc.pdf	https://tccc.org.ua/files/downloads/crush-syndrome-under-prolonged-field-care-pcc-en.pdf	TCCC Ukraine
+medical	tccc_sepsis_management_pfc.pdf	https://tccc.org.ua/files/downloads/sepsis-management-in-prolonged-field-care-pcc-en.pdf	TCCC Ukraine
+medical	tccc_analgesia_antibiotic_administration.pdf	https://tccc.org.ua/files/downloads/module-14-analgesia-administration-antibiotic-administration-en.pdf	TCCC Ukraine

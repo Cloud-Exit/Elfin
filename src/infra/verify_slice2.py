@@ -65,8 +65,8 @@ def verify_zims(zim_dir: Path, config_path: Path) -> tuple[list[str], list[str]]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify Elfin Slice 2 datasets")
-    parser.add_argument("--raw-dir", default="./datasets/raw", help="Directory containing raw source docs")
-    parser.add_argument("--zim-dir", default="./datasets/zim", help="Directory containing ZIM archives")
+    parser.add_argument("--raw-dir", default="./data/datasets/raw", help="Directory containing raw source docs")
+    parser.add_argument("--zim-dir", default="./data/datasets/zim", help="Directory containing ZIM archives")
     parser.add_argument("--raw-config", default="./config/raw-docs.tsv", help="Raw docs config file")
     parser.add_argument("--zim-config", default="./config/kiwix-zims.txt", help="Kiwix ZIM config file")
     args = parser.parse_args()

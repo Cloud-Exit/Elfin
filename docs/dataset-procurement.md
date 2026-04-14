@@ -3,8 +3,8 @@
 ## Purpose
 
 Slice 2 seeds offline source material for Elfin:
-- raw PDFs in `datasets/raw/` for RAG ingestion
-- ZIM archives in `datasets/zim/` for Kiwix encyclopedia verification
+- raw PDFs in `data/datasets/raw/` for RAG ingestion
+- ZIM archives in `data/datasets/zim/` for Kiwix encyclopedia verification
 
 ## Command
 
@@ -15,8 +15,8 @@ HF_CLI_BIN=hf make download-assets
 This downloads:
 - runtime GGUF files into `data/models/`
 - fine-tune base model snapshot into `data/training/base-model/`
-- raw survival/medical/preparedness PDFs into `datasets/raw/`
-- Kiwix ZIM archives into `datasets/zim/`
+- raw survival/medical/preparedness PDFs into `data/datasets/raw/`
+- Kiwix ZIM archives into `data/datasets/zim/`
 
 ## Source Catalogs
 
@@ -42,8 +42,8 @@ This writes:
 3. Copy these directories to target media:
    - `data/models/`
    - `data/training/base-model/`
-   - `datasets/raw/`
-   - `datasets/zim/`
+   - `data/datasets/raw/`
+   - `data/datasets/zim/`
 4. On target device, run:
    - `make verify-slice1-assets`
    - `make ingest-validate`

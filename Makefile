@@ -1,9 +1,10 @@
 DEFAULT_GOAL := help
 
-PYTHON ?= python3
+VENV ?= .venv
+PYTHON ?= $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
+BOOTSTRAP_PYTHON ?= $(shell command -v python3.12 || command -v python3.13 || command -v python3.11 || command -v python3.10 || command -v python3)
 BUN ?= bun
 PIP ?= $(VENV)/bin/pip
-VENV ?= .venv
 MAX_WAIT_SECS ?= 60
 CHAT_MODEL ?= gemma-4-E4B-it-Q5_K_M.gguf
 CHAT_MMPROJ ?= mmproj-F16.gguf
@@ -23,7 +24,7 @@ define wait_for_http
 	exit 1
 endef
 
-.PHONY: help dev build build-frontend dev-frontend typecheck setup setup-python clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-plan ingest-validate train-validate test test-contracts verify-gemma4 smoke-gemma4 smoke-ingestion-live verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run
+.PHONY: help ensure-venv dev build build-frontend dev-frontend typecheck setup setup-python clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -82,6 +83,9 @@ test: test-contracts ## Run default test suite
 test-contracts: ## Run no-docker contract tests
 	$(PYTHON) -m unittest discover -s tests
 
+test-install-prep: ## Run unit tests for tools/prepare_image.py
+	$(PYTHON) -m unittest tests.test_prepare_image -v
+
 typecheck: ## Run TypeScript type-check
 	$(BUN) x tsc --noEmit
 
@@ -108,6 +112,22 @@ smoke-ingestion-live: ## Start Docker services and run live ingestion smoke test
 	$(call wait_for_http,http://localhost:6333/healthz,Qdrant,qdrant)
 	$(PYTHON) src/infra/smoke_ingestion_live.py
 
+chat: ## Start Docker services and open interactive cited RAG chat
+	@echo "Starting llama-server + llama-embed + Qdrant + Kiwix via Docker..."
+	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) EMBED_MODEL=$(EMBED_MODEL) docker compose up -d llama-server llama-embed qdrant kiwix
+	@echo "Waiting for llama-server..."
+	$(call wait_for_http,http://localhost:8081/health,llama-server,llama-server)
+	@echo "Waiting for llama-embed..."
+	$(call wait_for_http,http://localhost:8082/health,llama-embed,llama-embed)
+	@echo "Waiting for Qdrant..."
+	$(call wait_for_http,http://localhost:6333/healthz,Qdrant,qdrant)
+	@echo "Waiting for Kiwix..."
+	$(call wait_for_http,http://localhost:8083/catalog/v2/root.xml,Kiwix,kiwix)
+	$(PYTHON) src/cli/chat.py
+
+debug-kiwix: ## Probe local Kiwix search/article paths for a query
+	$(PYTHON) src/infra/debug_kiwix.py
+
 verify-slice1: ## Verify Slice 1 config and local assets
 	$(PYTHON) src/infra/verify_slice1.py
 
@@ -132,14 +152,26 @@ evals-validate: ## Validate evaluation scenarios
 evals-dry-run: ## Dry-run evaluation harness without model calls
 	$(PYTHON) src/evals/run.py --dry-run
 
-$(VENV)/bin/python:
-	$(PYTHON) -m venv $(VENV)
+ensure-venv:
+	@BOOTSTRAP="$$(basename $(BOOTSTRAP_PYTHON))"; \
+	EXPECTED="$$( $(BOOTSTRAP_PYTHON) -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' )"; \
+	if [ -x "$(VENV)/bin/python" ]; then \
+		CURRENT="$$( $(VENV)/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' )"; \
+		if [ "$$CURRENT" != "$$EXPECTED" ]; then \
+			echo "Recreating $(VENV) with $$BOOTSTRAP (have $$CURRENT, need $$EXPECTED)"; \
+			rm -rf $(VENV); \
+		fi; \
+	fi; \
+	if [ ! -x "$(VENV)/bin/python" ]; then \
+		echo "Creating $(VENV) with $$BOOTSTRAP"; \
+		$(BOOTSTRAP_PYTHON) -m venv $(VENV); \
+	fi
 
-setup: $(VENV)/bin/python ## Create venv, install Python deps, install Bun deps
+setup: ensure-venv ## Create venv, install Python deps, install Bun deps
 	$(BUN) install
 	$(PIP) install -r requirements.txt
 
-setup-python: $(VENV)/bin/python ## Create venv and install Python deps only
+setup-python: ensure-venv ## Create venv and install Python deps only
 	$(PIP) install -r requirements.txt
 
 clean: ## Remove generated build/test artifacts (keeps data/models qdrant zim media)

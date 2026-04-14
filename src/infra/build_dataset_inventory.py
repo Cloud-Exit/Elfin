@@ -74,8 +74,8 @@ def render_markdown(raw_entries: list[dict], zim_entries: list[dict]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build Elfin dataset inventory")
-    parser.add_argument("--raw-dir", default="./datasets/raw", help="Directory containing raw PDFs/docs")
-    parser.add_argument("--zim-dir", default="./datasets/zim", help="Directory containing ZIM archives")
+    parser.add_argument("--raw-dir", default="./data/datasets/raw", help="Directory containing raw PDFs/docs")
+    parser.add_argument("--zim-dir", default="./data/datasets/zim", help="Directory containing ZIM archives")
     parser.add_argument("--json-out", default="./data/datasets/inventory.json", help="JSON inventory output path")
     parser.add_argument("--md-out", default="./data/datasets/inventory.md", help="Markdown inventory output path")
     args = parser.parse_args()

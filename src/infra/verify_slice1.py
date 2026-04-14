@@ -110,7 +110,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Verify Elfin PRD Slice 1 prerequisites")
     parser.add_argument("--compose-file", default="./docker-compose.yml", help="Compose file to validate")
     parser.add_argument("--models-dir", default="./data/models", help="Directory containing GGUF files")
-    parser.add_argument("--zim-dir", default="./datasets/zim", help="Directory containing ZIM files")
+    parser.add_argument("--zim-dir", default="./data/datasets/zim", help="Directory containing ZIM files")
     parser.add_argument(
         "--config-only",
         action="store_true",

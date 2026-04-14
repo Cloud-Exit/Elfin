@@ -71,7 +71,7 @@ def build_manifest(entries: list[dict]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Elfin ingestion source corpus")
-    parser.add_argument("--source-dir", default="./datasets/raw", help="Directory containing raw source documents")
+    parser.add_argument("--source-dir", default="./data/datasets/raw", help="Directory containing raw source documents")
     parser.add_argument(
         "--out",
         default="./data/ingestion/source-manifest.json",

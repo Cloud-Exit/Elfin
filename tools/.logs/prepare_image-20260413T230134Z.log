@@ -1,0 +1,2 @@
+[2026-04-13T23:01:34Z] [doctor] python 3.12.13, platform Linux
+[2026-04-13T23:01:34Z] [error] missing required host tools: parted, lsblk

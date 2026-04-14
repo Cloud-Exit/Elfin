@@ -1,7 +1,7 @@
 """
 Elfin ingestion pipeline.
 
-Reads PDFs/MDs/TXTs from datasets/raw, chunks them deterministically, embeds via
+Reads PDFs/MDs/TXTs from data/datasets/raw, chunks them deterministically, embeds via
 llama-embed (OpenAI-compatible), and stores vectors in Qdrant. Idempotent via
 SHA256 hash. Supports dry-run planning without runtime dependencies.
 
@@ -12,10 +12,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 import hashlib
 import json
 import logging
+import re
 import sys
+import uuid
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 logging.basicConfig(
@@ -25,7 +30,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("elfin-ingest")
 
-DEFAULT_SOURCE_DIR = "./datasets/raw"
+DEFAULT_SOURCE_DIR = "./data/datasets/raw"
 DEFAULT_QDRANT_URL = "http://localhost:6333"
 DEFAULT_EMBED_URL = "http://localhost:8082"
 DEFAULT_REPORT_OUT = "./data/ingestion/latest-run.json"
@@ -35,6 +40,28 @@ CHUNK_SIZE = 1024
 CHUNK_OVERLAP = 200
 EMBED_MODEL = "nomic-embed-text"
 EMBED_DIM = 768
+BATCH_SIZE = 16
+
+
+@dataclass
+class LocalDocument:
+    text: str
+    metadata: dict = field(default_factory=dict)
+
+
+def sanitize_text(text: str) -> str:
+    cleaned = []
+    for ch in text:
+        if ch in "\n\t":
+            cleaned.append(ch)
+            continue
+        if ord(ch) < 32:
+            continue
+        cleaned.append(ch)
+    normalized = "".join(cleaned)
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
 
 
 def file_hash(path: Path) -> str:
@@ -59,7 +86,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHU
     if chunk_overlap < 0 or chunk_overlap >= chunk_size:
         raise ValueError("chunk_overlap must be >= 0 and < chunk_size")
 
-    normalized = text.strip()
+    normalized = sanitize_text(text)
     if not normalized:
         return []
 
@@ -135,92 +162,191 @@ def build_chunk_records(
 
 
 def get_indexed_hashes(client: object, collection: str) -> set[str]:
-    """Retrieve all document hashes already in the collection."""
-    try:
-        hashes = set()
-        offset = None
-        while True:
-            result = client.scroll(
-                collection_name=collection,
-                limit=100,
-                offset=offset,
-                with_payload=["file_hash"],
+    """Retrieve all document hashes already in the collection via Qdrant HTTP."""
+    hashes = set()
+    offset: str | int | None = None
+
+    while True:
+        body: dict[str, object] = {
+            "limit": 100,
+            "with_payload": ["file_hash"],
+            "with_vectors": False,
+        }
+        if offset is not None:
+            body["offset"] = offset
+
+        try:
+            response = http_json(
+                "POST",
+                client.rstrip("/") + f"/collections/{collection}/points/scroll",
+                body,
             )
-            points, next_offset = result
-            for point in points:
-                if point.payload and "file_hash" in point.payload:
-                    hashes.add(point.payload["file_hash"])
-            if next_offset is None:
-                break
-            offset = next_offset
-        return hashes
-    except Exception:
-        return set()
+        except Exception:
+            return set()
+
+        result = response.get("result", {})
+        for point in result.get("points", []):
+            payload = point.get("payload", {})
+            file_hash = payload.get("file_hash")
+            if file_hash:
+                hashes.add(file_hash)
+
+        offset = result.get("next_page_offset")
+        if offset is None:
+            break
+
+    return hashes
 
 
-def load_runtime() -> dict:
+def http_json(method: str, url: str, payload: dict | None = None, timeout: int = 60) -> dict:
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode()
+        headers["Content-Type"] = "application/json"
+
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
-        from llama_index.core.schema import TextNode
-        from llama_index.embeddings.openai import OpenAIEmbedding
-        from llama_index.vector_stores.qdrant import QdrantVectorStore
-        from qdrant_client import QdrantClient
-        from qdrant_client.models import Distance, PayloadSchemaType, VectorParams
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode()
+    except urllib.error.HTTPError as exc:
+        detail = f"HTTP {exc.code}: {exc.reason}"
+        try:
+            error_body = exc.read().decode(errors="ignore").strip()
+        except Exception:
+            error_body = ""
+        if error_body:
+            detail += f" body={error_body[:400]}"
+        raise RuntimeError(detail) from exc
+    return json.loads(body) if body else {}
+
+
+def ensure_runtime_dependencies() -> None:
+    try:
+        import pypdf  # noqa: F401
     except ImportError as exc:
         raise RuntimeError(
             "Missing ingestion runtime dependencies. Run `make setup-python` before live ingestion."
         ) from exc
 
-    return {
-        "SimpleDirectoryReader": SimpleDirectoryReader,
-        "StorageContext": StorageContext,
-        "VectorStoreIndex": VectorStoreIndex,
-        "TextNode": TextNode,
-        "OpenAIEmbedding": OpenAIEmbedding,
-        "QdrantVectorStore": QdrantVectorStore,
-        "QdrantClient": QdrantClient,
-        "Distance": Distance,
-        "PayloadSchemaType": PayloadSchemaType,
-        "VectorParams": VectorParams,
-    }
 
-
-def ensure_collection(client: object, collection: str, dim: int, runtime: dict) -> None:
-    """Create the Qdrant collection if it doesn't exist, with on-disk storage."""
-    collections = [entry.name for entry in client.get_collections().collections]
-    if collection in collections:
+def ensure_collection(qdrant_url: str, collection: str, dim: int) -> None:
+    """Create the Qdrant collection if it doesn't exist, with on-disk vectors."""
+    collections = http_json("GET", qdrant_url.rstrip("/") + "/collections")
+    names = [entry["name"] for entry in collections.get("result", {}).get("collections", [])]
+    if collection in names:
         log.info("Collection '%s' already exists", collection)
         return
 
     log.info("Creating collection '%s' (dim=%d, on_disk=true)", collection, dim)
-    client.create_collection(
-        collection_name=collection,
-        vectors_config=runtime["VectorParams"](
-            size=dim,
-            distance=runtime["Distance"].COSINE,
-            on_disk=True,
-        ),
-    )
-    client.create_payload_index(
-        collection_name=collection,
-        field_name="file_hash",
-        field_schema=runtime["PayloadSchemaType"].KEYWORD,
+    http_json(
+        "PUT",
+        qdrant_url.rstrip("/") + f"/collections/{collection}",
+        {
+            "vectors": {
+                "size": dim,
+                "distance": "Cosine",
+                "on_disk": True,
+            }
+        },
     )
 
 
-def build_text_nodes(chunk_records: list[dict], runtime: dict) -> list[object]:
-    return [
-        runtime["TextNode"](text=record["text"], metadata=record["metadata"])
-        for record in chunk_records
-    ]
-
-
-def verify_collection_queryable(client: object, collection: str) -> dict:
+def verify_collection_queryable(qdrant_url: str, collection: str) -> dict:
     try:
-        result = client.count(collection_name=collection, exact=False)
-        return {"ok": True, "count": getattr(result, "count", None)}
+        result = http_json(
+            "POST",
+            qdrant_url.rstrip("/") + f"/collections/{collection}/points/count",
+            {"exact": False},
+        )
+        return {"ok": True, "count": result.get("result", {}).get("count")}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+def read_document_objects(path: Path) -> list[LocalDocument]:
+    suffix = path.suffix.lower()
+    if suffix in {".md", ".txt"}:
+        text = sanitize_text(path.read_text(encoding="utf-8", errors="ignore"))
+        if not text:
+            raise ValueError(f"document has no extractable text: {path.name}")
+        return [LocalDocument(text=text)]
+
+    if suffix == ".pdf":
+        header = path.open("rb").read(5)
+        if header != b"%PDF-":
+            raise ValueError(f"not a valid pdf file: {path.name}")
+
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        pages = []
+        for page in reader.pages:
+            text = sanitize_text(page.extract_text() or "")
+            if text:
+                pages.append(text)
+        if not pages:
+            raise ValueError(f"pdf has no extractable text: {path.name}")
+        return [LocalDocument(text="\n\n".join(pages))]
+
+    raise ValueError(f"unsupported document type: {path}")
+
+
+def embed_texts(embed_url: str, texts: list[str], model_name: str = EMBED_MODEL) -> list[list[float]]:
+    payload_texts = [sanitize_text(text) for text in texts if sanitize_text(text)]
+    if not payload_texts:
+        raise ValueError("no valid text chunks to embed")
+    response = http_json(
+        "POST",
+        embed_url.rstrip("/") + "/v1/embeddings",
+        {"input": payload_texts, "model": model_name},
+        timeout=120,
+    )
+    data = response.get("data", [])
+    if len(data) != len(payload_texts):
+        raise RuntimeError(f"embedding response mismatch: expected {len(payload_texts)}, got {len(data)}")
+    return [item["embedding"] for item in data]
+
+
+def embed_chunk_records(
+    embed_url: str,
+    records: list[dict],
+    model_name: str = EMBED_MODEL,
+) -> tuple[list[tuple[dict, list[float]]], list[dict]]:
+    if not records:
+        return [], []
+
+    texts = [sanitize_text(record["text"]) for record in records]
+    try:
+        vectors = embed_texts(embed_url, texts, model_name=model_name)
+        return list(zip(records, vectors, strict=True)), []
+    except Exception as exc:
+        if len(records) == 1:
+            return [], [
+                {
+                    "chunk_index": records[0]["metadata"]["chunk_index"],
+                    "error": str(exc),
+                }
+            ]
+
+        mid = max(1, len(records) // 2)
+        log.warning(
+            "Embedding batch failed for %d chunks; retrying smaller batches: %s",
+            len(records),
+            exc,
+        )
+        left_ok, left_failed = embed_chunk_records(embed_url, records[:mid], model_name=model_name)
+        right_ok, right_failed = embed_chunk_records(embed_url, records[mid:], model_name=model_name)
+        return left_ok + right_ok, left_failed + right_failed
+
+
+def upsert_points(qdrant_url: str, collection: str, points: list[dict]) -> None:
+    http_json(
+        "PUT",
+        qdrant_url.rstrip("/") + f"/collections/{collection}/points?wait=true",
+        {"points": points},
+        timeout=120,
+    )
 
 
 def write_report(summary: dict, report_out: str) -> None:
@@ -263,14 +389,12 @@ def run_pipeline(
         return summary
 
     indexed_hashes: set[str] = set()
-    runtime: dict | None = None
-    client = None
+    qdrant_client_url = qdrant_url.rstrip("/")
 
     if not dry_run:
-        runtime = load_runtime()
-        client = runtime["QdrantClient"](url=qdrant_url)
-        ensure_collection(client, COLLECTION_NAME, EMBED_DIM, runtime)
-        indexed_hashes = set() if force else get_indexed_hashes(client, COLLECTION_NAME)
+        ensure_runtime_dependencies()
+        ensure_collection(qdrant_client_url, COLLECTION_NAME, EMBED_DIM)
+        indexed_hashes = set() if force else get_indexed_hashes(qdrant_client_url, COLLECTION_NAME)
     elif force:
         indexed_hashes = set()
 
@@ -281,25 +405,13 @@ def run_pipeline(
         write_report(summary, report_out)
         return summary
 
-    assert runtime is not None
-    assert client is not None
-
-    embed_model = runtime["OpenAIEmbedding"](
-        api_base=embed_url.rstrip("/") + "/v1",
-        api_key="not-needed",
-        model_name=EMBED_MODEL,
-    )
-    vector_store = runtime["QdrantVectorStore"](client=client, collection_name=COLLECTION_NAME)
-    storage_context = runtime["StorageContext"].from_defaults(vector_store=vector_store)
-
     for entry in pending:
         doc_path = Path(entry["path"])
         digest = entry["file_hash"]
         log.info("Processing: %s", doc_path.name)
 
         try:
-            reader = runtime["SimpleDirectoryReader"](input_files=[str(doc_path)])
-            documents = reader.load_data()
+            documents = read_document_objects(doc_path)
             chunk_records = build_chunk_records(
                 documents,
                 source_file=doc_path.name,
@@ -307,20 +419,49 @@ def run_pipeline(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
-            nodes = build_text_nodes(chunk_records, runtime)
-            runtime["VectorStoreIndex"](
-                nodes,
-                storage_context=storage_context,
-                embed_model=embed_model,
-            )
+            chunk_records = [record for record in chunk_records if sanitize_text(record["text"])]
+            if not chunk_records:
+                raise ValueError(f"document has no valid chunks after sanitization: {doc_path.name}")
+
+            embedded_pairs: list[tuple[dict, list[float]]] = []
+            failed_chunks: list[dict] = []
+            for start in range(0, len(chunk_records), BATCH_SIZE):
+                batch = chunk_records[start : start + BATCH_SIZE]
+                for record in batch:
+                    record["text"] = sanitize_text(record["text"])
+                batch_pairs, batch_failed = embed_chunk_records(embed_url, batch)
+                embedded_pairs.extend(batch_pairs)
+                failed_chunks.extend(batch_failed)
+
+            if not embedded_pairs:
+                raise ValueError(f"document has no embeddable chunks: {doc_path.name}")
+
+            points = []
+            for record, vector in embedded_pairs:
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{digest}:{record['metadata']['chunk_index']}"))
+                points.append(
+                    {
+                        "id": point_id,
+                        "payload": {
+                            **record["metadata"],
+                            "text": record["text"],
+                        },
+                        "vector": vector,
+                    }
+                )
+
+            upsert_points(qdrant_client_url, COLLECTION_NAME, points)
             summary["indexed_documents"].append(
                 {
                     "name": doc_path.name,
                     "file_hash": digest,
-                    "chunks": len(nodes),
+                    "chunks": len(points),
+                    "skipped_chunks": len(failed_chunks),
                 }
             )
-            log.info("  Indexed: %s (%d chunks)", doc_path.name, len(nodes))
+            if failed_chunks:
+                log.warning("  Indexed with %d skipped chunks: %s", len(failed_chunks), doc_path.name)
+            log.info("  Indexed: %s (%d chunks)", doc_path.name, len(points))
         except Exception as exc:
             summary["failed_documents"].append(
                 {
@@ -332,7 +473,7 @@ def run_pipeline(
             log.exception("  Failed to process: %s", doc_path.name)
 
     if verify_queryable:
-        summary["queryable"] = verify_collection_queryable(client, COLLECTION_NAME)
+        summary["queryable"] = verify_collection_queryable(qdrant_client_url, COLLECTION_NAME)
 
     write_report(summary, report_out)
     log.info("Ingestion complete.")
