@@ -363,13 +363,6 @@ def guess_article_titles(question: str) -> list[str]:
         flags=re.IGNORECASE,
     )
     entity = re.sub(r"^(i think|tell me about)\s+", "", entity, flags=re.IGNORECASE).strip()
-    if entity:
-        candidates.append(entity)
-
-    tokens = [token for token in re.findall(r"[A-Za-z0-9]+", lowered) if token.lower() not in STOPWORDS]
-    if tokens:
-        candidates.append(" ".join(tokens))
-
     focused_tokens = [
         token
         for token in re.findall(r"[A-Za-z0-9]+", lowered)
@@ -379,6 +372,13 @@ def guess_article_titles(question: str) -> list[str]:
         candidates.append(" ".join(focused_tokens))
         if focused_tokens[-1].lower() not in GENERIC_QUERY_TERMS:
             candidates.append(focused_tokens[-1])
+
+    if entity:
+        candidates.append(entity)
+
+    tokens = [token for token in re.findall(r"[A-Za-z0-9]+", lowered) if token.lower() not in STOPWORDS]
+    if tokens:
+        candidates.append(" ".join(tokens))
 
     seen: set[str] = set()
     ordered: list[str] = []
@@ -396,6 +396,30 @@ def guess_article_titles(question: str) -> list[str]:
 
 def normalize_title(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def title_matches_guess(result_title: str, guessed_titles: list[str]) -> bool:
+    normalized_result = normalize_title(result_title)
+    result_tokens = set(normalized_result.split())
+    for guessed in guessed_titles:
+        normalized_guess = normalize_title(guessed)
+        guess_words = normalized_guess.split()
+        guess_tokens = set(guess_words)
+        if not normalized_guess:
+            continue
+        if normalized_result == normalized_guess:
+            return True
+        if normalized_guess in normalized_result or normalized_result in normalized_guess:
+            extra_tokens = result_tokens - guess_tokens
+            if len(extra_tokens) <= 1:
+                return True
+        if guess_tokens and result_tokens and guess_tokens <= result_tokens:
+            extra_tokens = result_tokens - guess_tokens
+            if len(extra_tokens) <= 1:
+                return True
+        if len(guess_words) == 1 and guess_words[0] in result_tokens and len(result_tokens) <= 3:
+            return True
+    return False
 
 
 def fetch_guessed_kiwix_article(kiwix_url: str, book: str, title: str) -> tuple[str, str] | None:
@@ -478,7 +502,7 @@ def build_kiwix_context(kiwix_url: str, zim_dir: Path, question: str, max_chars:
     # Prefer exact article-title fetches for entity questions before loose search hits.
     for book in books[:2]:
         suggested_titles: list[dict] = []
-        for title in guessed_titles[:2]:
+        for title in guessed_titles[:4]:
             try:
                 suggested_titles.extend(kiwix_suggest_titles(kiwix_url, book, title, count=8))
             except Exception:
@@ -505,7 +529,7 @@ def build_kiwix_context(kiwix_url: str, zim_dir: Path, question: str, max_chars:
                     "text": excerpt,
                 }
             ]
-        for title in guessed_titles[:2]:
+        for title in guessed_titles[:4]:
             guessed = fetch_guessed_kiwix_article(kiwix_url, book, title)
             if not guessed:
                 continue
@@ -536,13 +560,12 @@ def build_kiwix_context(kiwix_url: str, zim_dir: Path, question: str, max_chars:
     blocks: list[str] = []
     total = 0
 
-    normalized_guesses = {normalize_title(title) for title in guessed_titles}
     for result in results:
-        normalized_result_title = normalize_title(result["title"])
-        exact_title_match = normalized_result_title in normalized_guesses
-        if guessed_titles and not exact_title_match:
-            # If we can identify a concrete target title, avoid subtopics like
-            # "Adolf Hitler's cult of personality" when the user asked "who was Adolf Hitler?"
+        acceptable_title_match = title_matches_guess(result["title"], guessed_titles)
+        if guessed_titles and not acceptable_title_match:
+            # If we can identify a concrete target title, avoid unrelated or weakly
+            # related titles, but still allow useful variants like "Cyanide poisoning"
+            # for questions about cyanide antidotes.
             continue
         title_tokens = tokenize(result["title"])
         if query_tokens and not (query_tokens & title_tokens):

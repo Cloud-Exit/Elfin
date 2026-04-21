@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 import tempfile
 
-from src.cli.chat import SYSTEM_PROMPT, build_context, filter_relevant_points, guess_article_titles, is_usable_answer, normalize_title, normalize_zim_name, synthesize_answer, trim_wikipedia_text
+from src.cli.chat import SYSTEM_PROMPT, build_context, filter_relevant_points, guess_article_titles, is_usable_answer, normalize_title, normalize_zim_name, synthesize_answer, title_matches_guess, trim_wikipedia_text
 
 
 class ChatCliTests(unittest.TestCase):
@@ -86,10 +86,15 @@ class ChatCliTests(unittest.TestCase):
         guessed = guess_article_titles("what is the antidote for cyanide?")
         lowered = [item.lower() for item in guessed]
         self.assertIn("cyanide", lowered)
+        self.assertEqual(lowered[0], "cyanide")
 
     def test_normalize_title_collapses_related_punctuation(self) -> None:
         self.assertEqual(normalize_title("Adolf Hitler's cult of personality"), "adolf hitler s cult of personality")
         self.assertEqual(normalize_title("Adolf Hitler"), "adolf hitler")
+
+    def test_title_matches_guess_allows_specific_variants(self) -> None:
+        self.assertTrue(title_matches_guess("Cyanide poisoning", ["cyanide"]))
+        self.assertFalse(title_matches_guess("Mental health of Adolf Hitler", ["adolf hitler"]))
 
     def test_synthesize_answer_handles_fracture_question(self) -> None:
         answer = synthesize_answer(

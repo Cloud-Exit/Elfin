@@ -111,7 +111,7 @@ def main() -> int:
             + "/suggest?content="
             + quote(book)
             + "&term="
-            + quote("adolf hitler")
+            + quote(args.query)
             + "&count=8"
         )
         print(f"\nSuggest URL: {suggest_url}")
