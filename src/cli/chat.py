@@ -9,6 +9,7 @@ and prints source references for each answer.
 from __future__ import annotations
 
 import argparse
+import html
 from html.parser import HTMLParser
 import json
 import re
@@ -23,11 +24,17 @@ from pathlib import Path
 
 DEFAULT_COLLECTION = "elfin_docs"
 MIN_SEMANTIC_SCORE = 0.62
+MIN_KIWIX_TEXT_CHARS = 80
 STOPWORDS = {
     "a", "an", "and", "are", "be", "but", "by", "do", "for", "from", "i", "if", "in",
     "is", "it", "me", "my", "of", "on", "or", "the", "to", "what", "with", "you",
     "your", "im", "i'm",
     "who", "was",
+}
+QUESTION_WORDS = {"who", "what", "where", "when", "why", "how"}
+AUXILIARY_QUERY_TERMS = {
+    "is", "was", "were", "are", "did", "do", "does",
+    "wa", "wer", "ar", "doe",
 }
 QUERY_EXPANSIONS = {
     "ptsd": {"post", "traumatic", "stress", "disorder", "trauma"},
@@ -40,6 +47,16 @@ GENERIC_QUERY_TERMS = {
     "cure", "causes", "cause", "what", "who", "where", "when", "why", "how", "for",
     "the", "a", "an", "of", "is", "was", "are", "were", "do", "does", "did",
 }
+LOW_SIGNAL_ANSWER_MARKERS = (
+    "i do not know",
+    "i don't know",
+    "insufficient context",
+    "not enough context",
+    "no context",
+    "cannot answer",
+    "can't answer",
+    "unable to answer",
+)
 SYSTEM_PROMPT = textwrap.dedent(
     """
     You are Elfin, an offline survival assistant operating in disaster, collapse, or apocalypse conditions.
@@ -47,7 +64,8 @@ SYSTEM_PROMPT = textwrap.dedent(
     Give the most practical immediate steps the user can take with limited supplies.
     Answer using the provided retrieved context when possible.
     If the context supports the answer, cite sources inline like [source.pdf#chunk_12].
-    If the current context is insufficient, say so plainly and do not fabricate facts.
+    If no retrieved context is available, answer from general knowledge and say when you are uncertain.
+    If the current context is insufficient for a factual claim, say so plainly and do not fabricate facts.
     Do not answer with only citations, bullet labels, or a source list.
     Write a real explanation in complete sentences.
     When the user asks what to do, give concrete step-by-step actions first, then brief rationale.
@@ -157,7 +175,7 @@ class SearchResultsParser(HTMLParser):
             return
         attr_map = dict(attrs)
         href = attr_map.get("href") or ""
-        if "/content/" not in href:
+        if not any(marker in href for marker in ("/content/", "/raw/", "/A/")):
             return
         self.in_link = True
         self.current_href = href
@@ -254,20 +272,92 @@ def discover_kiwix_books(zim_dir: Path) -> list[str]:
     return ordered
 
 
+def preferred_kiwix_books(books: list[str]) -> list[str]:
+    preferred = [
+        book
+        for book in books
+        if book.startswith("wikipedia_") or book.startswith("wikimed_") or "medicine" in book
+    ]
+    return preferred or books
+
+
 def parse_kiwix_search_results(html: str) -> list[dict]:
     parser = SearchResultsParser()
     parser.feed(html)
     return parser.results
 
 
+def parse_kiwix_result_href(kiwix_url: str, href: str) -> dict | None:
+    absolute = urllib.parse.urljoin(kiwix_url.rstrip("/") + "/", href)
+    parsed = urlparse(absolute)
+    path = parsed.path
+
+    match = re.search(r"/content/([^/]+)/(.+)$", path)
+    if match:
+        return {
+            "book": unquote(match.group(1)),
+            "path": unquote(match.group(2)),
+            "browse_url": absolute,
+        }
+
+    match = re.search(r"/raw/([^/]+)/content/(.+)$", path)
+    if match:
+        book = unquote(match.group(1))
+        article_path = unquote(match.group(2))
+        return {
+            "book": book,
+            "path": article_path,
+            "browse_url": kiwix_url.rstrip("/") + "/content/" + quote(book) + "/" + quote(article_path, safe="/"),
+        }
+
+    match = re.search(r"/([^/]+)/A/(.+)$", path)
+    if match and match.group(1) not in {"catalog", "search", "raw", "content", "suggest"}:
+        book = unquote(match.group(1))
+        article_path = unquote(match.group(2))
+        return {
+            "book": book,
+            "path": article_path,
+            "browse_url": absolute,
+        }
+
+    return None
+
+
 def strip_html(html: str) -> str:
     parser = TextExtractor()
     parser.feed(html)
-    return parser.text()
+    text = parser.text()
+    if text.strip():
+        return text
+    return extract_html_paragraphs(html)
+
+
+def extract_html_paragraphs(html_text: str) -> str:
+    body = re.sub(r"(?is)<(script|style|table)\b.*?</\1>", " ", html_text)
+    paragraphs = re.findall(r"(?is)<p\b[^>]*>(.*?)</p>", body)
+    if paragraphs:
+        text = "\n".join(
+            re.sub(r"(?is)<[^>]+>", " ", paragraph)
+            for paragraph in paragraphs
+        )
+    else:
+        text = re.sub(r"(?is)<[^>]+>", " ", body)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def clean_wikipedia_prose(text: str) -> str:
+    cleaned = html.unescape(text)
+    cleaned = re.sub(r"\[\s*(?:[a-z]|\d+|citation needed|clarification needed)\s*\]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r"([(\[])\s+", r"\1", cleaned)
+    cleaned = re.sub(r"\s+([)\]])", r"\1", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
 
 
 def trim_wikipedia_text(text: str) -> str:
-    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    lines = [clean_wikipedia_prose(re.sub(r"\s+", " ", line).strip()) for line in text.splitlines()]
     lines = [line for line in lines if line]
     if not lines:
         return ""
@@ -320,53 +410,70 @@ def trim_wikipedia_text(text: str) -> str:
             break
 
     if lead:
-        return "\n".join(lead)
-    return "\n".join(filtered[:12])
+        return clean_wikipedia_prose("\n".join(lead))
+    return clean_wikipedia_prose("\n".join(filtered[:12]))
 
 
 def kiwix_search(kiwix_url: str, book: str, question: str, limit: int) -> list[dict]:
-    url = (
-        kiwix_url.rstrip("/")
-        + "/search?content="
-        + quote(book)
-        + "&pattern="
-        + quote(question)
-        + "&pageLength="
-        + str(limit)
-    )
-    html = http_text(url, timeout=60)
-    results = parse_kiwix_search_results(html)
+    urls = [
+        (
+            kiwix_url.rstrip("/")
+            + "/search?books.name="
+            + quote(book)
+            + "&pattern="
+            + quote(question)
+            + "&start=0"
+        ),
+        (
+            kiwix_url.rstrip("/")
+            + "/search?content="
+            + quote(book)
+            + "&pattern="
+            + quote(question)
+            + "&pageLength="
+            + str(limit)
+        ),
+    ]
     cleaned: list[dict] = []
-    for result in results:
-        href = result["href"]
-        match = re.search(r"/content/([^/]+)/(.+)$", href)
-        if not match:
+    seen: set[tuple[str, str]] = set()
+    for url in urls:
+        try:
+            html = http_text(url, timeout=60)
+        except Exception:
             continue
-        cleaned.append(
-            {
-                "book": unquote(match.group(1)),
-                "path": unquote(match.group(2)),
-                "title": result["title"],
-            }
-        )
-    return cleaned
+        results = parse_kiwix_search_results(html)
+        for result in results:
+            parsed = parse_kiwix_result_href(kiwix_url, result["href"])
+            if not parsed:
+                continue
+            key = (parsed["book"], parsed["path"])
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(
+                {
+                    "book": parsed["book"],
+                    "path": parsed["path"],
+                    "title": result["title"],
+                    "browse_url": parsed["browse_url"],
+                }
+            )
+        if cleaned:
+            break
+    return cleaned[:limit]
 
 
 def guess_article_titles(question: str) -> list[str]:
     lowered = question.strip().rstrip(" ?!.")
     candidates: list[str] = []
 
-    entity = re.sub(
-        r"^(who|what|where|when|why|how)\s+(is|was|were|are|did|do)\s+",
-        "",
-        lowered,
-        flags=re.IGNORECASE,
-    )
-    entity = re.sub(r"^(i think|tell me about)\s+", "", entity, flags=re.IGNORECASE).strip()
+    entity = extract_subject_phrase(lowered)
     focused_tokens = [
         token
         for token in re.findall(r"[A-Za-z0-9]+", lowered)
-        if token.lower() not in STOPWORDS and token.lower() not in GENERIC_QUERY_TERMS
+        if token.lower() not in STOPWORDS
+        and token.lower() not in GENERIC_QUERY_TERMS
+        and token.lower() not in AUXILIARY_QUERY_TERMS
     ]
     if focused_tokens:
         candidates.append(" ".join(focused_tokens))
@@ -392,6 +499,22 @@ def guess_article_titles(question: str) -> list[str]:
         seen.add(key)
         ordered.append(normalized)
     return ordered
+
+
+def extract_subject_phrase(question: str) -> str:
+    tokens = re.findall(r"[A-Za-z0-9]+", question)
+    if not tokens:
+        return ""
+
+    index = 0
+    if tokens[index].lower() in QUESTION_WORDS:
+        index += 1
+    while index < len(tokens) and tokens[index].lower() in AUXILIARY_QUERY_TERMS:
+        index += 1
+
+    subject = " ".join(tokens[index:]).strip()
+    subject = re.sub(r"^(i think|tell me about)\s+", "", subject, flags=re.IGNORECASE).strip()
+    return subject
 
 
 def normalize_title(text: str) -> str:
@@ -422,14 +545,47 @@ def title_matches_guess(result_title: str, guessed_titles: list[str]) -> bool:
     return False
 
 
+def title_relevance(result_title: str, guessed_titles: list[str]) -> float:
+    normalized_result = normalize_title(result_title)
+    result_tokens = set(normalized_result.split())
+    best = 0.0
+    for guessed in guessed_titles:
+        normalized_guess = normalize_title(guessed)
+        if not normalized_guess:
+            continue
+        guess_tokens = set(normalized_guess.split())
+        if normalized_result == normalized_guess:
+            return 3.0
+        if guess_tokens and guess_tokens <= result_tokens:
+            extra_tokens = len(result_tokens - guess_tokens)
+            best = max(best, 2.0 - min(extra_tokens, 6) * 0.1)
+            continue
+        overlap = len(guess_tokens & result_tokens)
+        if overlap:
+            best = max(best, overlap / max(len(guess_tokens), 1))
+    return best
+
+
 def fetch_guessed_kiwix_article(kiwix_url: str, book: str, title: str) -> tuple[str, str] | None:
-    slug = re.sub(r"\s+", "_", title.strip())
-    for path in [f"{slug}", f"{slug[0].upper()}/{slug}"]:
+    stripped = title.strip()
+    slugs = [
+        re.sub(r"\s+", "_", stripped),
+        re.sub(r"\s+", "_", stripped.title()),
+    ]
+    seen_paths: set[str] = set()
+    paths: list[str] = []
+    for slug in slugs:
+        for path in (slug, f"{slug[0].upper()}/{slug}"):
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            paths.append(path)
+    for path in paths:
         try:
             text = fetch_kiwix_article_text(kiwix_url, book, path)
         except Exception:
             continue
-        if text and len(text) > 200:
+        if text and len(text) >= MIN_KIWIX_TEXT_CHARS:
             return path, text
     return None
 
@@ -484,18 +640,84 @@ def kiwix_suggest_titles(kiwix_url: str, book: str, term: str, count: int = 10) 
     return ordered
 
 
+def kiwix_article_url_candidates(kiwix_url: str, book: str, path: str) -> list[str]:
+    normalized_path = path.strip().lstrip("/")
+    if not normalized_path:
+        return []
+
+    path_variants = [normalized_path]
+    if "/" not in normalized_path:
+        path_variants.append(f"A/{normalized_path}")
+    if "." not in normalized_path.rsplit("/", 1)[-1]:
+        html_variants = [f"{variant}.html" for variant in path_variants]
+        path_variants.extend(html_variants)
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for variant in path_variants:
+        templates = [
+            "/raw/{book}/content/{path}",
+            "/raw/{book}/{path}",
+            "/content/{book}/{path}",
+            "/{book}/{path}",
+        ]
+        if not variant.startswith("A/"):
+            templates.extend(
+                [
+                    "/raw/{book}/content/A/{path}",
+                    "/raw/{book}/A/{path}",
+                    "/content/{book}/A/{path}",
+                    "/{book}/A/{path}",
+                ]
+            )
+        for template in templates:
+            url = (
+                kiwix_url.rstrip("/")
+                + template.format(
+                    book=quote(book),
+                    path=quote(variant, safe="/"),
+                )
+            )
+            if url in seen:
+                continue
+            seen.add(url)
+            candidates.append(url)
+    return candidates
+
+
 def fetch_kiwix_article_text(kiwix_url: str, book: str, path: str) -> str:
-    url = kiwix_url.rstrip("/") + "/raw/" + quote(book) + "/content/" + quote(path, safe="/")
-    text = strip_html(http_text(url, timeout=60))
-    if book.startswith("wikipedia_") or book.startswith("wikimed_"):
-        return trim_wikipedia_text(text)
-    return text
+    errors: list[str] = []
+    for url in kiwix_article_url_candidates(kiwix_url, book, path):
+        try:
+            raw_html = http_text(url, timeout=60)
+        except Exception as exc:
+            errors.append(f"{url} -> {exc}")
+            continue
+        text = strip_html(raw_html)
+        if book.startswith("wikipedia_") or book.startswith("wikimed_"):
+            paragraph_text = extract_html_paragraphs(raw_html)
+            base_text = text or paragraph_text
+            if not base_text.strip():
+                continue
+            trimmed = trim_wikipedia_text(base_text)
+            if len(trimmed) >= 120:
+                return trimmed
+            better = trim_wikipedia_text(paragraph_text) or paragraph_text or text
+            if better.strip():
+                return better
+            continue
+        if not text.strip():
+            continue
+        return text
+    joined = "; ".join(errors[:3]) if errors else "no candidate URLs generated"
+    raise RuntimeError(f"failed to fetch Kiwix article for book={book} path={path}: {joined}")
 
 
 def build_kiwix_context(kiwix_url: str, zim_dir: Path, question: str, max_chars: int) -> tuple[str, list[dict]]:
     books = discover_kiwix_books(zim_dir)
     if not books:
         return "", []
+    books = preferred_kiwix_books(books)
 
     guessed_titles = guess_article_titles(question)
 
@@ -514,7 +736,7 @@ def build_kiwix_context(kiwix_url: str, zim_dir: Path, question: str, max_chars:
                 text = fetch_kiwix_article_text(kiwix_url, book, path)
             except Exception:
                 continue
-            if not text or len(text) <= 200:
+            if not text or len(text) < MIN_KIWIX_TEXT_CHARS:
                 continue
             excerpt = text[:1600].strip()
             citation = f"{book}:{title}"
@@ -548,24 +770,45 @@ def build_kiwix_context(kiwix_url: str, zim_dir: Path, question: str, max_chars:
                 }
             ]
 
-    results: list[dict] = []
-    for book in books[:3]:
-        try:
-            results.extend(kiwix_search(kiwix_url, book, question, limit=3))
-        except Exception:
+    search_terms: list[str] = []
+    seen_terms: set[str] = set()
+    for term in guessed_titles[:3] + [question]:
+        normalized = normalize_title(term)
+        if not normalized or normalized in seen_terms:
             continue
+        seen_terms.add(normalized)
+        search_terms.append(term)
+
+    results: list[dict] = []
+    seen_results: set[tuple[str, str]] = set()
+    for book in books[:3]:
+        for term in search_terms:
+            try:
+                found = kiwix_search(kiwix_url, book, term, limit=5)
+            except Exception:
+                continue
+            for item in found:
+                key = (item["book"], item["path"])
+                if key in seen_results:
+                    continue
+                seen_results.add(key)
+                results.append(item)
 
     query_tokens = expand_query_tokens(tokenize(question))
+    results.sort(
+        key=lambda result: (
+            title_relevance(result["title"], guessed_titles),
+            len(expand_query_tokens(tokenize(result["title"])) & query_tokens),
+        ),
+        reverse=True,
+    )
     used: list[dict] = []
     blocks: list[str] = []
     total = 0
 
     for result in results:
-        acceptable_title_match = title_matches_guess(result["title"], guessed_titles)
-        if guessed_titles and not acceptable_title_match:
-            # If we can identify a concrete target title, avoid unrelated or weakly
-            # related titles, but still allow useful variants like "Cyanide poisoning"
-            # for questions about cyanide antidotes.
+        match_score = title_relevance(result["title"], guessed_titles)
+        if guessed_titles and match_score <= 0.0:
             continue
         title_tokens = tokenize(result["title"])
         if query_tokens and not (query_tokens & title_tokens):
@@ -587,12 +830,17 @@ def build_kiwix_context(kiwix_url: str, zim_dir: Path, question: str, max_chars:
                 "source_file": citation,
                 "chunk_index": "article",
                 "score": None,
-                "lexical_overlap": len(query_tokens & title_tokens) / len(query_tokens) if query_tokens else 0.0,
-                "browse_url": kiwix_url.rstrip("/") + "/content/" + quote(result["book"]) + "/" + quote(result["path"], safe="/"),
+                "lexical_overlap": max(
+                    len(query_tokens & title_tokens) / len(query_tokens) if query_tokens else 0.0,
+                    match_score / 3.0,
+                ),
+                "browse_url": result.get("browse_url") or kiwix_url.rstrip("/") + "/content/" + quote(result["book"]) + "/" + quote(result["path"], safe="/"),
                 "text": excerpt,
             }
         )
         total += len(block)
+        if match_score >= 3.0:
+            return "\n".join(blocks).strip(), used
 
     if used:
         return "\n".join(blocks).strip(), used
@@ -732,6 +980,61 @@ def build_context(points: list[dict], max_chars: int) -> tuple[str, list[dict]]:
     return "\n".join(blocks).strip(), used
 
 
+def build_user_prompt(question: str, context: str) -> str:
+    if context:
+        context_note = (
+            "Use the retrieved context for factual grounding. "
+            "Use citations from the retrieved context when making factual claims."
+        )
+    else:
+        context_note = (
+            "No retrieved context is available for this turn. "
+            "Answer from your general knowledge instead of refusing just because context is missing. "
+            "If you are uncertain, say so plainly."
+        )
+    return (
+        f"Question:\n{question}\n\n"
+        f"Retrieved context:\n{context or '[none]'}\n\n"
+        "Write a practical explanatory answer in complete sentences. "
+        "Do not return only source labels. "
+        f"{context_note}"
+    )
+
+
+def extract_chat_result(response: dict) -> tuple[str, str | None]:
+    choices = response.get("choices") or []
+    if not choices:
+        raise RuntimeError("chat completion returned no choices")
+    choice = choices[0] or {}
+    message = choice.get("message") or {}
+    content = (message.get("content") or "").strip()
+    finish_reason = choice.get("finish_reason")
+    return content, finish_reason if isinstance(finish_reason, str) else None
+
+
+def has_truncated_tail(answer: str) -> bool:
+    stripped = answer.strip()
+    if not stripped:
+        return False
+    if stripped[-1] in ".!?)]}\"'":
+        return False
+    tail = split_sentences(stripped)[-1]
+    tail_words = tail.split()
+    if len(tail_words) <= 4:
+        return True
+    if len(tail_words) <= 8 and not re.search(r"\b(and|or|because|which|that|who|whose|where|when|his|her|their|its)\b$", tail.lower()):
+        return False
+    return True
+
+
+def trim_to_complete_sentences(answer: str) -> str:
+    parts = split_sentences(answer)
+    complete = [part for part in parts if part and part[-1] in ".!?"]
+    if complete:
+        return " ".join(complete).strip()
+    return answer.strip()
+
+
 def ask_llama(
     llama_url: str,
     model_name: str,
@@ -744,13 +1047,7 @@ def ask_llama(
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for turn in history[-6:]:
         messages.append(turn)
-    user_prompt = (
-        f"Question:\n{question}\n\n"
-        f"Retrieved context:\n{context or '[none]'}\n\n"
-        "Write a practical explanatory answer in complete sentences. "
-        "Do not return only source labels. "
-        "Use citations from the retrieved context when making factual claims."
-    )
+    user_prompt = build_user_prompt(question, context)
     messages.append({"role": "user", "content": user_prompt})
 
     payload = {
@@ -767,8 +1064,8 @@ def ask_llama(
         payload,
         timeout=timeout,
     )
-    answer = response["choices"][0]["message"]["content"].strip()
-    if len(answer) >= 40 and not re.fullmatch(r"[\[\]\w.\-:#(), ]+", answer):
+    answer, finish_reason = extract_chat_result(response)
+    if finish_reason != "length" and not has_truncated_tail(answer) and len(answer) >= 40 and not re.fullmatch(r"[\[\]\w.\-:#(), ]+", answer):
         return answer
 
     retry_messages = messages + [
@@ -779,9 +1076,11 @@ def ask_llama(
         {
             "role": "user",
             "content": (
-                "Your last answer was too short or empty. "
+                "Your last answer was too short, incomplete, or empty. "
                 "Try again with a useful explanation in 4-8 complete sentences. "
-                "Give practical guidance, not just citations."
+                "Give practical guidance, not just citations. "
+                "Finish your answer cleanly with complete sentences. "
+                "If no context was provided, answer from your general knowledge."
             ),
         },
     ]
@@ -796,7 +1095,37 @@ def ask_llama(
         },
         timeout=timeout,
     )
-    return retry_response["choices"][0]["message"]["content"].strip()
+    retry_answer, retry_finish_reason = extract_chat_result(retry_response)
+    if retry_finish_reason != "length" and not has_truncated_tail(retry_answer) and is_usable_answer(retry_answer):
+        return retry_answer
+
+    third_messages = messages + [
+        {"role": "assistant", "content": answer or "[empty response]"},
+        {"role": "user", "content": (
+            "Your last answer was too short, incomplete, or empty. You are being asked again. "
+            "Answer the question directly in 4-8 complete sentences. "
+            "If context was provided, use it with citations. "
+            "Finish your answer with complete sentences and do not stop mid-thought. "
+            "If no context was provided, answer from your general knowledge — this is the final attempt."
+        )},
+    ]
+    third_response = http_json(
+        "POST",
+        llama_url.rstrip("/") + "/v1/chat/completions",
+        {
+            **payload,
+            "messages": third_messages,
+            "max_tokens": max(max_tokens, 512),
+            "temperature": 0.3,
+        },
+        timeout=timeout,
+    )
+    third_answer, third_finish_reason = extract_chat_result(third_response)
+    if third_finish_reason == "length" or has_truncated_tail(third_answer):
+        trimmed = trim_to_complete_sentences(third_answer)
+        if trimmed and trimmed != third_answer:
+            return trimmed
+    return third_answer
 
 
 def split_sentences(text: str) -> list[str]:
@@ -923,11 +1252,23 @@ def synthesize_answer(question: str, sources: list[dict]) -> str:
 
 def is_usable_answer(answer: str) -> bool:
     stripped = answer.strip()
+    lowered = stripped.lower()
+    sentence_count = len(split_sentences(stripped))
+    word_count = len(stripped.split())
+
+    if any(marker in lowered for marker in LOW_SIGNAL_ANSWER_MARKERS):
+        return False
+    if has_truncated_tail(stripped):
+        return False
     if len(stripped) < 40:
+        if word_count >= 5 and re.search(r"\b(is|was|were|are|means|refers|led|includes|involves)\b", lowered):
+            return True
         return False
-    if "[" in stripped and "]" in stripped and len(split_sentences(stripped)) < 2:
+    if "[" in stripped and "]" in stripped and sentence_count < 2:
         return False
-    if len(split_sentences(stripped)) < 2 and len(stripped.split()) < 12:
+    if sentence_count == 1 and word_count >= 7 and re.search(r"\b(is|was|were|are|means|refers|led|includes|involves)\b", lowered):
+        return True
+    if sentence_count < 2 and word_count < 12:
         return False
     return True
 
@@ -994,12 +1335,7 @@ def repl(
                 print("Falling back to Kiwix...", flush=True)
                 context, sources = build_kiwix_context(kiwix_url, Path(zim_dir), question, max_context_chars)
                 if not sources:
-                    print(
-                        "\nElfin> I do not have relevant indexed source material for that question yet. "
-                        "No cited answer available from the current local corpus or Kiwix library."
-                    )
-                    print("Sources: none")
-                    continue
+                    print("No sources retrieved from Qdrant or Kiwix.", flush=True)
             print("Generating answer...", flush=True)
             answer = ask_llama(
                 llama_url=llama_url,

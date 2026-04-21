@@ -4,8 +4,9 @@ import unittest
 
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
-from src.cli.chat import SYSTEM_PROMPT, build_context, filter_relevant_points, guess_article_titles, is_usable_answer, normalize_title, normalize_zim_name, synthesize_answer, title_matches_guess, trim_wikipedia_text
+from src.cli.chat import SYSTEM_PROMPT, ask_llama, build_context, build_kiwix_context, build_user_prompt, clean_wikipedia_prose, fetch_guessed_kiwix_article, fetch_kiwix_article_text, filter_relevant_points, guess_article_titles, has_truncated_tail, is_usable_answer, normalize_title, normalize_zim_name, parse_kiwix_result_href, preferred_kiwix_books, synthesize_answer, title_matches_guess, trim_to_complete_sentences, trim_wikipedia_text
 
 
 class ChatCliTests(unittest.TestCase):
@@ -82,6 +83,10 @@ class ChatCliTests(unittest.TestCase):
         guessed = guess_article_titles("who was adolf hitler?")
         self.assertIn("adolf hitler", [item.lower() for item in guessed])
 
+    def test_guess_article_titles_recovers_from_truncated_auxiliary(self) -> None:
+        guessed = guess_article_titles("who wa adolf hitler ?")
+        self.assertEqual(guessed[0].lower(), "adolf hitler")
+
     def test_guess_article_titles_extracts_core_subject_from_treatment_question(self) -> None:
         guessed = guess_article_titles("what is the antidote for cyanide?")
         lowered = [item.lower() for item in guessed]
@@ -135,10 +140,225 @@ class ChatCliTests(unittest.TestCase):
         self.assertIn("Austrian-born German politician", text)
         self.assertNotIn("Preceded by", text)
 
+    def test_clean_wikipedia_prose_removes_footnote_markers_and_spacing_artifacts(self) -> None:
+        text = clean_wikipedia_prose(
+            "Adolf Hitler [ a ] (20 April 1889 – 30 April 1945) was an Austrian-born German politician , "
+            "leader of the Nazi Party . [ b ]"
+        )
+        self.assertNotIn("[ a ]", text)
+        self.assertNotIn("[ b ]", text)
+        self.assertIn("German politician,", text)
+        self.assertIn("Nazi Party.", text)
+
+    def test_build_user_prompt_allows_general_knowledge_when_context_missing(self) -> None:
+        prompt = build_user_prompt("who was adolf hitler?", "")
+        self.assertIn("No retrieved context is available", prompt)
+        self.assertIn("Answer from your general knowledge", prompt)
+
+    def test_fetch_kiwix_article_text_falls_back_to_content_route(self) -> None:
+        def fake_http_text(url: str, timeout: int = 60) -> str:
+            if "/raw/" in url:
+                raise RuntimeError("404")
+            if "/content/" in url:
+                return "<html><body><p>Adolf Hitler was an Austrian-born German politician.</p></body></html>"
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with patch("src.cli.chat.http_text", side_effect=fake_http_text):
+            text = fetch_kiwix_article_text(
+                "http://localhost:8083",
+                "wikipedia_en_all_nopic_2026-03",
+                "A/Adolf_Hitler",
+            )
+
+        self.assertIn("Austrian-born German politician", text)
+
+    def test_fetch_kiwix_article_text_supports_book_a_path_route(self) -> None:
+        def fake_http_text(url: str, timeout: int = 60) -> str:
+            if "/wikipedia_en_all_nopic_2026-03/A/Adolf_Hitler" in url:
+                return "<html><body><p>Adolf Hitler was an Austrian-born German politician.</p></body></html>"
+            raise RuntimeError("404")
+
+        with patch("src.cli.chat.http_text", side_effect=fake_http_text):
+            text = fetch_kiwix_article_text(
+                "http://localhost:8083",
+                "wikipedia_en_all_nopic_2026-03",
+                "Adolf_Hitler",
+            )
+
+        self.assertIn("Austrian-born German politician", text)
+
+    def test_fetch_kiwix_article_text_uses_paragraph_fallback_for_wikipedia(self) -> None:
+        html = """
+        <html><body>
+        <p>Adolf Hitler was an Austrian-born German politician who led Nazi Germany from 1933 to 1945.</p>
+        <p>He was central to the rise of Nazism and the start of World War II.</p>
+        </body></html>
+        """
+
+        with patch("src.cli.chat.http_text", return_value=html), \
+             patch("src.cli.chat.strip_html", return_value=""):
+            text = fetch_kiwix_article_text(
+                "http://localhost:8083",
+                "wikipedia_en_all_nopic_2026-03",
+                "Adolf_Hitler",
+            )
+
+        self.assertIn("Adolf Hitler was an Austrian-born German politician", text)
+        self.assertIn("World War II", text)
+
+    def test_fetch_guessed_kiwix_article_tries_titlecase_slug(self) -> None:
+        def fake_fetch(kiwix_url: str, book: str, path: str) -> str:
+            if path == "Adolf_Hitler":
+                return (
+                    "Adolf Hitler was an Austrian-born German politician who led Nazi Germany from 1933 to 1945. "
+                    "He was central to the rise of Nazism and the start of World War II."
+                )
+            raise RuntimeError("404")
+
+        with patch("src.cli.chat.fetch_kiwix_article_text", side_effect=fake_fetch):
+            guessed = fetch_guessed_kiwix_article(
+                "http://localhost:8083",
+                "wikipedia_en_all_nopic_2026-03",
+                "adolf hitler",
+            )
+
+        self.assertIsNotNone(guessed)
+        assert guessed is not None
+        self.assertEqual(guessed[0], "Adolf_Hitler")
+        self.assertIn("Adolf Hitler was", guessed[1])
+
+    def test_parse_kiwix_result_href_supports_book_a_path_scheme(self) -> None:
+        parsed = parse_kiwix_result_href(
+            "http://localhost:8083",
+            "/wikipedia_en_all_nopic_2026-03/A/Adolf_Hitler",
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed["book"], "wikipedia_en_all_nopic_2026-03")
+        self.assertEqual(parsed["path"], "Adolf_Hitler")
+
+    def test_preferred_kiwix_books_prioritizes_wikipedia_over_stackoverflow(self) -> None:
+        books = preferred_kiwix_books(
+            [
+                "wikipedia_en_all_nopic_2026-03",
+                "wikipedia_en_medicine_nopic_2026-04",
+                "stackoverflow.com_en_all_2023-11",
+            ]
+        )
+        self.assertEqual(
+            books,
+            ["wikipedia_en_all_nopic_2026-03", "wikipedia_en_medicine_nopic_2026-04"],
+        )
+
+    def test_build_kiwix_context_searches_subject_terms_for_exact_article(self) -> None:
+        def fake_search(kiwix_url: str, book: str, query: str, limit: int) -> list[dict]:
+            if query.lower() == "who was adolf hitler ?":
+                return [
+                    {
+                        "book": book,
+                        "path": "Mental_health_of_Adolf_Hitler",
+                        "title": "Mental health of Adolf Hitler",
+                        "browse_url": f"{kiwix_url}/content/{book}/Mental_health_of_Adolf_Hitler",
+                    }
+                ]
+            if query.lower() == "adolf hitler":
+                return [
+                    {
+                        "book": book,
+                        "path": "Adolf_Hitler",
+                        "title": "Adolf Hitler",
+                        "browse_url": f"{kiwix_url}/content/{book}/Adolf_Hitler",
+                    }
+                ]
+            return []
+
+        def fake_fetch(kiwix_url: str, book: str, path: str) -> str:
+            if path == "Adolf_Hitler":
+                return (
+                    "Adolf Hitler was an Austrian-born German politician who led Nazi Germany from 1933 to 1945. "
+                    "He was central to the rise of Nazism and the start of World War II."
+                )
+            return "Mental health article"
+
+        with patch("src.cli.chat.discover_kiwix_books", return_value=["wikipedia_en_all_nopic_2026-03"]), \
+             patch("src.cli.chat.kiwix_suggest_titles", return_value=[]), \
+             patch("src.cli.chat.fetch_guessed_kiwix_article", return_value=None), \
+             patch("src.cli.chat.kiwix_search", side_effect=fake_search), \
+             patch("src.cli.chat.fetch_kiwix_article_text", side_effect=fake_fetch):
+            context, sources = build_kiwix_context(
+                "http://localhost:8083",
+                Path("/workspace/data/datasets/zim"),
+                "who was adolf hitler ?",
+                max_chars=3000,
+            )
+
+        self.assertIn("Adolf Hitler was an Austrian-born German politician", context)
+        self.assertEqual(len(sources), 1)
+        self.assertIn("Adolf Hitler", sources[0]["source_file"])
+
     def test_is_usable_answer_rejects_blank_or_citation_only(self) -> None:
         self.assertFalse(is_usable_answer(""))
         self.assertFalse(is_usable_answer("[foo.pdf#chunk_1]"))
         self.assertTrue(is_usable_answer("This is a real answer. It has two sentences."))
+        self.assertFalse(
+            is_usable_answer(
+                "Adolf Hitler was the dictator of Germany from 1933 to 1945. His"
+            )
+        )
+
+    def test_is_usable_answer_accepts_brief_factual_statement(self) -> None:
+        self.assertTrue(is_usable_answer("Adolf Hitler was the dictator of Nazi Germany."))
+        self.assertFalse(is_usable_answer("I do not know."))
+
+    def test_has_truncated_tail_detects_dangling_fragment(self) -> None:
+        self.assertTrue(has_truncated_tail("Adolf Hitler was the dictator of Germany from 1933 to 1945. His"))
+        self.assertFalse(has_truncated_tail("Adolf Hitler was the dictator of Germany from 1933 to 1945."))
+
+    def test_trim_to_complete_sentences_removes_incomplete_tail(self) -> None:
+        self.assertEqual(
+            trim_to_complete_sentences("Adolf Hitler was the dictator of Germany from 1933 to 1945. His"),
+            "Adolf Hitler was the dictator of Germany from 1933 to 1945.",
+        )
+
+    def test_ask_llama_retries_when_finish_reason_is_length(self) -> None:
+        responses = [
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Adolf Hitler was the dictator of Germany from 1933 to 1945. His"
+                        },
+                        "finish_reason": "length",
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "Adolf Hitler was an Austrian-born German politician who led Nazi Germany from 1933 to 1945. "
+                                "He was central to the rise of Nazism and the start of World War II."
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        ]
+
+        with patch("src.cli.chat.http_json", side_effect=responses):
+            answer = ask_llama(
+                llama_url="http://localhost:8081",
+                model_name="gemma-4-E4B-it-Q5_K_M",
+                question="who was adolf hitler?",
+                context="",
+                history=[],
+                max_tokens=384,
+                timeout=60,
+            )
+
+        self.assertIn("Austrian-born German politician", answer)
 
 
 if __name__ == "__main__":
