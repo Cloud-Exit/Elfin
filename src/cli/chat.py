@@ -25,6 +25,7 @@ from pathlib import Path
 DEFAULT_COLLECTION = "elfin_docs"
 MIN_SEMANTIC_SCORE = 0.62
 MIN_KIWIX_TEXT_CHARS = 80
+DEFAULT_THINKING_BUDGET_TOKENS = 0
 STOPWORDS = {
     "a", "an", "and", "are", "be", "but", "by", "do", "for", "from", "i", "if", "in",
     "is", "it", "me", "my", "of", "on", "or", "the", "to", "what", "with", "you",
@@ -57,6 +58,29 @@ LOW_SIGNAL_ANSWER_MARKERS = (
     "can't answer",
     "unable to answer",
 )
+UNCONDITIONAL_PROFESSIONAL_CARE_MARKERS = (
+    "seek medical attention immediately",
+    "must seek medical attention",
+    "need immediate medical attention",
+    "seek immediate medical care",
+    "must seek immediate medical care",
+    "need immediate medical care",
+    "get immediate medical care",
+    "get medical care immediately",
+    "go to the hospital immediately",
+    "go to a hospital immediately",
+    "call emergency services immediately",
+    "call 911 immediately",
+    "see a doctor immediately",
+)
+CONDITIONAL_CARE_MARKERS = (
+    "if skilled medical help is available",
+    "if medical help is available",
+    "if professional care is available",
+    "if you can reach medical help",
+    "if you can reach a clinician",
+    "if evacuation is possible",
+)
 SYSTEM_PROMPT = textwrap.dedent(
     """
     You are Elfin, an offline survival assistant operating in disaster, collapse, or apocalypse conditions.
@@ -68,10 +92,15 @@ SYSTEM_PROMPT = textwrap.dedent(
     If the current context is insufficient for a factual claim, say so plainly and do not fabricate facts.
     Do not answer with only citations, bullet labels, or a source list.
     Write a real explanation in complete sentences.
+    Paraphrase retrieved material in your own words instead of echoing source phrasing.
+    Do not mimic encyclopedia lead style, citation-heavy prose, or document boilerplate.
+    Sound like Elfin: plainspoken, grounded, and concise.
     When the user asks what to do, give concrete step-by-step actions first, then brief rationale.
     Prefer 4-8 sentences when the context is substantive.
     Do not default to "go see a doctor" or "call emergency services" as the main answer.
     You may mention professional care only as a secondary note when clearly relevant, and phrase it conditionally, for example "if skilled medical help is available."
+    Never tell the user they "must seek medical attention" as the main directive.
+    If you mention professional care, you must also explain what to do when help is unavailable, and the field-expedient steps must come first.
     For injury or medical questions, prioritize stabilization, danger signs, hygiene, monitoring, and practical field-expedient actions.
     For health or mental health concerns, avoid diagnosis certainty.
     Keep answers direct, calm, and practical.
@@ -980,11 +1009,59 @@ def build_context(points: list[dict], max_chars: int) -> tuple[str, list[dict]]:
     return "\n".join(blocks).strip(), used
 
 
+def build_context_from_sources(sources: list[dict], max_chars: int) -> tuple[str, list[dict]]:
+    blocks: list[str] = []
+    used: list[dict] = []
+    seen: set[tuple[str, object]] = set()
+    total = 0
+
+    for source in sources:
+        text = str(source.get("text") or "").strip()
+        if not text:
+            continue
+        source_file = str(source.get("source_file") or "unknown")
+        chunk_index = source.get("chunk_index", "?")
+        key = (source_file, chunk_index)
+        if key in seen:
+            continue
+        seen.add(key)
+        score = source.get("score")
+        block = (
+            f"[{source_file}#chunk_{chunk_index} score={score:.3f}]\n{text}\n"
+            if isinstance(score, (float, int))
+            else f"[{source_file}#chunk_{chunk_index}]\n{text}\n"
+        )
+        if total + len(block) > max_chars and used:
+            break
+        blocks.append(block)
+        used.append(source)
+        total += len(block)
+
+    return "\n".join(blocks).strip(), used
+
+
+def merge_retrieved_sources(
+    qdrant_sources: list[dict],
+    kiwix_sources: list[dict],
+    max_chars: int,
+) -> tuple[str, list[dict]]:
+    merged = sorted(
+        qdrant_sources + kiwix_sources,
+        key=lambda source: (
+            source.get("score") if isinstance(source.get("score"), (float, int)) else -1.0,
+            source.get("lexical_overlap", 0.0),
+        ),
+        reverse=True,
+    )
+    return build_context_from_sources(merged, max_chars)
+
+
 def build_user_prompt(question: str, context: str) -> str:
     if context:
         context_note = (
             "Use the retrieved context for factual grounding. "
-            "Use citations from the retrieved context when making factual claims."
+            "Use citations from the retrieved context when making factual claims. "
+            "Paraphrase the source material in your own wording instead of copying its sentence structure or tone."
         )
     else:
         context_note = (
@@ -996,20 +1073,63 @@ def build_user_prompt(question: str, context: str) -> str:
         f"Question:\n{question}\n\n"
         f"Retrieved context:\n{context or '[none]'}\n\n"
         "Write a practical explanatory answer in complete sentences. "
+        "Sound like a calm field guide, not a Wikipedia article. "
         "Do not return only source labels. "
         f"{context_note}"
     )
 
 
-def extract_chat_result(response: dict) -> tuple[str, str | None]:
+def _strip_reasoning_block(text: str, label: str) -> str:
+    pattern = rf"(?is)^\s*{re.escape(label)}\s*:\s*"
+    match = re.match(pattern, text)
+    if not match:
+        return text
+    rest = text[match.end():]
+    lines = rest.split("\n")
+    drop = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            drop += 1
+            continue
+        if re.match(r"^\d+[.)]", stripped):
+            drop += 1
+            continue
+        if re.match(r"^[-*•]\s", stripped):
+            drop += 1
+            continue
+        if stripped[0].islower():
+            drop += 1
+            continue
+        break
+    return "\n".join(lines[drop:]).strip()
+
+
+def extract_visible_answer(text: str) -> str:
+    cleaned = text.strip()
+    if "<channel|>" in cleaned:
+        cleaned = cleaned.split("<channel|>")[-1].strip()
+    cleaned = re.sub(r"(?is)^.*?</think>", "", cleaned).strip()
+    cleaned = _strip_reasoning_block(cleaned, "thinking process")
+    cleaned = _strip_reasoning_block(cleaned, "plan")
+    if cleaned.startswith("The user is asking") and "<channel|>" not in text:
+        paragraphs = [part.strip() for part in cleaned.splitlines() if part.strip()]
+        for paragraph in paragraphs:
+            if paragraph[:1].isupper() and not paragraph.lower().startswith(("the user is asking", "plan:", "i must ensure", "i need to", "1.", "2.", "3.", "4.", "5.")):
+                return paragraph
+    return cleaned
+
+
+def extract_chat_result(response: dict) -> tuple[str, str | None, str]:
     choices = response.get("choices") or []
     if not choices:
         raise RuntimeError("chat completion returned no choices")
     choice = choices[0] or {}
     message = choice.get("message") or {}
-    content = (message.get("content") or "").strip()
+    raw_content = (message.get("content") or "").strip()
+    content = extract_visible_answer(raw_content)
     finish_reason = choice.get("finish_reason")
-    return content, finish_reason if isinstance(finish_reason, str) else None
+    return content, finish_reason if isinstance(finish_reason, str) else None, raw_content
 
 
 def has_truncated_tail(answer: str) -> bool:
@@ -1035,6 +1155,42 @@ def trim_to_complete_sentences(answer: str) -> str:
     return answer.strip()
 
 
+def overrelies_on_professional_care(answer: str) -> bool:
+    lowered = answer.lower()
+    if not any(marker in lowered for marker in UNCONDITIONAL_PROFESSIONAL_CARE_MARKERS):
+        return False
+    sentences = re.split(r"(?<=[.!?])\s+", lowered)
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if any(marker in sentence for marker in UNCONDITIONAL_PROFESSIONAL_CARE_MARKERS):
+            if not any(marker in sentence for marker in CONDITIONAL_CARE_MARKERS):
+                return True
+    return False
+
+
+def record_model_attempt(
+    debug_attempts: list[dict] | None,
+    stage: str,
+    answer: str,
+    finish_reason: str | None,
+    raw_answer: str | None = None,
+) -> None:
+    if debug_attempts is None:
+        return
+    debug_attempts.append(
+        {
+            "stage": stage,
+            "finish_reason": finish_reason,
+            "usable": is_usable_answer(answer),
+            "truncated": has_truncated_tail(answer),
+            "answer": answer,
+            "raw_answer": raw_answer if raw_answer is not None else answer,
+        }
+    )
+
+
 def ask_llama(
     llama_url: str,
     model_name: str,
@@ -1043,6 +1199,7 @@ def ask_llama(
     history: list[dict],
     max_tokens: int,
     timeout: int,
+    debug_attempts: list[dict] | None = None,
 ) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for turn in history[-6:]:
@@ -1056,6 +1213,7 @@ def ask_llama(
         "stream": False,
         "max_tokens": max_tokens,
         "temperature": 0.2,
+        "thinking_budget_tokens": DEFAULT_THINKING_BUDGET_TOKENS,
     }
 
     response = http_json(
@@ -1064,7 +1222,8 @@ def ask_llama(
         payload,
         timeout=timeout,
     )
-    answer, finish_reason = extract_chat_result(response)
+    answer, finish_reason, raw_answer = extract_chat_result(response)
+    record_model_attempt(debug_attempts, "initial", answer, finish_reason, raw_answer=raw_answer)
     if finish_reason != "length" and not has_truncated_tail(answer) and len(answer) >= 40 and not re.fullmatch(r"[\[\]\w.\-:#(), ]+", answer):
         return answer
 
@@ -1095,7 +1254,8 @@ def ask_llama(
         },
         timeout=timeout,
     )
-    retry_answer, retry_finish_reason = extract_chat_result(retry_response)
+    retry_answer, retry_finish_reason, retry_raw_answer = extract_chat_result(retry_response)
+    record_model_attempt(debug_attempts, "retry", retry_answer, retry_finish_reason, raw_answer=retry_raw_answer)
     if retry_finish_reason != "length" and not has_truncated_tail(retry_answer) and is_usable_answer(retry_answer):
         return retry_answer
 
@@ -1120,7 +1280,8 @@ def ask_llama(
         },
         timeout=timeout,
     )
-    third_answer, third_finish_reason = extract_chat_result(third_response)
+    third_answer, third_finish_reason, third_raw_answer = extract_chat_result(third_response)
+    record_model_attempt(debug_attempts, "final", third_answer, third_finish_reason, raw_answer=third_raw_answer)
     if third_finish_reason == "length" or has_truncated_tail(third_answer):
         trimmed = trim_to_complete_sentences(third_answer)
         if trimmed and trimmed != third_answer:
@@ -1244,6 +1405,69 @@ def synthesize_answer(question: str, sources: list[dict]) -> str:
                     break
         return " ".join(body) + (" " + citation_text if citation_text else "")
 
+    if any(term in lowered for term in {"infection", "infected", "wound", "puncture", "nail", "rusty"}):
+        chosen = pick_relevant_lines(
+            cleaned_lines,
+            (
+                "clean",
+                "wash",
+                "soap",
+                "water",
+                "bandage",
+                "cover",
+                "redness",
+                "swelling",
+                "oozing",
+                "pain",
+                "fever",
+                "confusion",
+                "shortness of breath",
+                "heart rate",
+                "clammy",
+                "sepsis",
+            ),
+            limit=6,
+        )
+        fallback_steps = [
+            "Treat it as a contaminated puncture wound: flush it thoroughly with clean water and wash the surrounding skin with soap if you have it.",
+            "Do not seal dirt inside the wound; remove visible debris gently, then cover it with the cleanest dressing or bandage you have and change that dressing when it gets wet or dirty.",
+            "Rest the leg, keep it elevated when possible, and mark the edge of any redness so you can tell if the infection is spreading.",
+            "Watch for danger signs such as rapidly spreading redness, worsening swelling, pus, fever, confusion, fast breathing, or the person becoming weak or clammy.",
+            "If help is truly reachable, this kind of worsening puncture wound may need antibiotics or tetanus treatment, but until then focus on cleaning, drainage, hygiene, hydration, and close monitoring.",
+        ]
+        practical: list[str] = []
+        for line in chosen:
+            lower = line.lower()
+            if any(term in lower for term in ("clean", "wash", "soap", "water")):
+                practical.append("Flush the wound thoroughly with clean water and wash around it with soap to reduce contamination.")
+            elif any(term in lower for term in ("bandage", "cover", "dressing")):
+                practical.append("Cover the wound with the cleanest dressing available and replace that covering when it becomes wet, dirty, or soaked through.")
+            elif any(term in lower for term in ("redness", "swelling", "oozing", "pain")):
+                practical.append("Monitor for spreading redness, swelling, pus, worsening pain, or foul-smelling drainage, because those are signs the infection is getting worse.")
+            elif any(term in lower for term in ("fever", "confusion", "shortness of breath", "heart rate", "clammy", "sepsis")):
+                practical.append("If the person develops fever, confusion, fast breathing, a racing pulse, or becomes clammy and weak, treat that as possible whole-body infection and keep them resting, hydrated, and under constant watch.")
+        if not practical:
+            practical = fallback_steps
+        deduped = []
+        seen: set[str] = set()
+        for item in practical:
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        body = deduped[:4]
+        if len(body) < 4:
+            for item in fallback_steps:
+                key = item.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                body.append(item)
+                if len(body) >= 4:
+                    break
+        return " ".join(body) + (" " + citation_text if citation_text else "")
+
     selected = sentences[:4] or [combined[:500].strip()]
     if not selected:
         return ""
@@ -1257,6 +1481,8 @@ def is_usable_answer(answer: str) -> bool:
     word_count = len(stripped.split())
 
     if any(marker in lowered for marker in LOW_SIGNAL_ANSWER_MARKERS):
+        return False
+    if overrelies_on_professional_care(stripped):
         return False
     if has_truncated_tail(stripped):
         return False
@@ -1295,6 +1521,22 @@ def print_sources(sources: list[dict]) -> None:
         print(line)
 
 
+def print_model_attempts(attempts: list[dict]) -> None:
+    if not attempts:
+        return
+    print("Raw model attempts:")
+    for attempt in attempts:
+        finish_reason = attempt.get("finish_reason") or "n/a"
+        usable = "yes" if attempt.get("usable") else "no"
+        truncated = "yes" if attempt.get("truncated") else "no"
+        answer = str(attempt.get("raw_answer") or "[empty response]")
+        print(
+            f"- {attempt.get('stage', 'unknown')}: finish_reason={finish_reason}, "
+            f"usable={usable}, truncated={truncated}"
+        )
+        print(f"  {answer}")
+
+
 def repl(
     llama_url: str,
     embed_url: str,
@@ -1308,6 +1550,7 @@ def repl(
     max_context_chars: int,
     max_tokens: int,
     generation_timeout: int,
+    show_raw_model_answer: bool,
 ) -> int:
     history: list[dict] = []
 
@@ -1330,13 +1573,13 @@ def repl(
             print("Retrieving sources...", flush=True)
             points = query_points(qdrant_url, collection, vector, top_k)
             points = filter_relevant_points(points, question)
-            context, sources = build_context(points, max_context_chars)
+            _, qdrant_sources = build_context(points, max_context_chars)
+            _, kiwix_sources = build_kiwix_context(kiwix_url, Path(zim_dir), question, max_context_chars)
+            context, sources = merge_retrieved_sources(qdrant_sources, kiwix_sources, max_context_chars)
             if not sources:
-                print("Falling back to Kiwix...", flush=True)
-                context, sources = build_kiwix_context(kiwix_url, Path(zim_dir), question, max_context_chars)
-                if not sources:
-                    print("No sources retrieved from Qdrant or Kiwix.", flush=True)
+                print("No sources retrieved from Qdrant or Kiwix.", flush=True)
             print("Generating answer...", flush=True)
+            debug_attempts: list[dict] | None = [] if show_raw_model_answer else None
             answer = ask_llama(
                 llama_url=llama_url,
                 model_name=model_name,
@@ -1345,9 +1588,12 @@ def repl(
                 history=history,
                 max_tokens=max_tokens,
                 timeout=generation_timeout,
+                debug_attempts=debug_attempts,
             )
+            if show_raw_model_answer and debug_attempts is not None:
+                print_model_attempts(debug_attempts)
             if not is_usable_answer(answer):
-                print("Model answer too short; synthesizing fallback answer from retrieved context...", flush=True)
+                print("Model answer failed quality check; synthesizing fallback answer from retrieved context...", flush=True)
                 answer = synthesize_answer(question, sources)
                 if not answer:
                     answer = "I found relevant source material, but the model did not produce a usable answer."
@@ -1378,6 +1624,7 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=384, help="Max answer tokens")
     parser.add_argument("--generation-timeout", type=int, default=240, help="Seconds to wait for each answer")
     parser.add_argument("--skip-refresh", action="store_true", help="Do not auto-refresh index if payload text is missing")
+    parser.add_argument("--show-raw-model-answer", action="store_true", help="Print raw model answers and finish reasons before fallback logic")
     args = parser.parse_args()
 
     errors = check_services(args.llama_url, args.embed_url, args.qdrant_url, args.kiwix_url)
@@ -1412,6 +1659,7 @@ def main() -> int:
         max_context_chars=args.max_context_chars,
         max_tokens=args.max_tokens,
         generation_timeout=args.generation_timeout,
+        show_raw_model_answer=args.show_raw_model_answer,
     )
 
 

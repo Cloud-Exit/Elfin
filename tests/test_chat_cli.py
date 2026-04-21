@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from src.cli.chat import SYSTEM_PROMPT, ask_llama, build_context, build_kiwix_context, build_user_prompt, clean_wikipedia_prose, fetch_guessed_kiwix_article, fetch_kiwix_article_text, filter_relevant_points, guess_article_titles, has_truncated_tail, is_usable_answer, normalize_title, normalize_zim_name, parse_kiwix_result_href, preferred_kiwix_books, synthesize_answer, title_matches_guess, trim_to_complete_sentences, trim_wikipedia_text
+from src.cli.chat import SYSTEM_PROMPT, ask_llama, build_context, build_kiwix_context, build_user_prompt, clean_wikipedia_prose, extract_visible_answer, fetch_guessed_kiwix_article, fetch_kiwix_article_text, filter_relevant_points, guess_article_titles, has_truncated_tail, is_usable_answer, merge_retrieved_sources, normalize_title, normalize_zim_name, overrelies_on_professional_care, parse_kiwix_result_href, preferred_kiwix_books, synthesize_answer, title_matches_guess, trim_to_complete_sentences, trim_wikipedia_text
 
 
 class ChatCliTests(unittest.TestCase):
@@ -15,6 +15,8 @@ class ChatCliTests(unittest.TestCase):
         self.assertIn("Do not default to \"go see a doctor\"", SYSTEM_PROMPT)
         self.assertIn("field-expedient", SYSTEM_PROMPT)
         self.assertIn("Write a real explanation in complete sentences", SYSTEM_PROMPT)
+        self.assertIn("Paraphrase retrieved material in your own words", SYSTEM_PROMPT)
+        self.assertIn("If you mention professional care", SYSTEM_PROMPT)
 
     def test_build_context_uses_payload_text_and_citations(self) -> None:
         points = [
@@ -42,6 +44,32 @@ class ChatCliTests(unittest.TestCase):
         self.assertIn("Psychological first aid includes practical support", context)
         self.assertEqual(len(used), 2)
         self.assertEqual(used[0]["source_file"], "who_psychological_first_aid_guide.pdf")
+
+    def test_merge_retrieved_sources_combines_qdrant_and_kiwix(self) -> None:
+        context, used = merge_retrieved_sources(
+            [
+                {
+                    "source_file": "manual.pdf",
+                    "chunk_index": 1,
+                    "score": 0.9,
+                    "lexical_overlap": 0.4,
+                    "text": "Field manual guidance.",
+                }
+            ],
+            [
+                {
+                    "source_file": "wikipedia_en_all_nopic_2026-03:Adolf Hitler",
+                    "chunk_index": "Adolf_Hitler",
+                    "score": None,
+                    "lexical_overlap": 1.0,
+                    "text": "Adolf Hitler was an Austrian-born German politician.",
+                }
+            ],
+            max_chars=10000,
+        )
+        self.assertIn("manual.pdf#chunk_1", context)
+        self.assertIn("wikipedia_en_all_nopic_2026-03:Adolf Hitler#chunk_Adolf_Hitler", context)
+        self.assertEqual(len(used), 2)
 
     def test_filter_relevant_points_rejects_irrelevant_low_overlap_chunks(self) -> None:
         points = [
@@ -117,6 +145,33 @@ class ChatCliTests(unittest.TestCase):
         self.assertIn("[tccc_module_17_fractures_splinting.pdf#chunk_2]", answer)
         self.assertNotIn("ON (breathing)", answer)
 
+    def test_synthesize_answer_handles_infected_puncture_wound_question(self) -> None:
+        answer = synthesize_answer(
+            "I think i might have a serious leg infection because of a rusty nail, what do I do ?",
+            [
+                {
+                    "source_file": "cdc_emergency_wound_care_after_disaster.pdf",
+                    "chunk_index": 0,
+                    "text": (
+                        "Clean the wound with soap and clean water. Cover the wound with a waterproof bandage. "
+                        "Watch for redness, swelling, oozing, or persistent soreness."
+                    ),
+                },
+                {
+                    "source_file": "tccc_sepsis_management_pfc.pdf",
+                    "chunk_index": 25,
+                    "text": (
+                        "Signs of severe infection include fever, confusion, shortness of breath, a high heart rate, "
+                        "or feeling clammy."
+                    ),
+                },
+            ],
+        )
+        self.assertIn("Flush the wound thoroughly", answer)
+        self.assertIn("cover it with the cleanest dressing", answer.lower())
+        self.assertIn("fever", answer.lower())
+        self.assertNotIn("seek immediate medical care", answer.lower())
+
     def test_synthesize_answer_handles_who_question(self) -> None:
         answer = synthesize_answer(
             "who was adolf hitler?",
@@ -150,10 +205,21 @@ class ChatCliTests(unittest.TestCase):
         self.assertIn("German politician,", text)
         self.assertIn("Nazi Party.", text)
 
+    def test_extract_visible_answer_strips_reasoning_preamble(self) -> None:
+        text = extract_visible_answer(
+            "Thinking Process:\n1. think\n2. think\n<channel|>Adolf Hitler was a dictator."
+        )
+        self.assertEqual(text, "Adolf Hitler was a dictator.")
+
     def test_build_user_prompt_allows_general_knowledge_when_context_missing(self) -> None:
         prompt = build_user_prompt("who was adolf hitler?", "")
         self.assertIn("No retrieved context is available", prompt)
         self.assertIn("Answer from your general knowledge", prompt)
+        self.assertIn("not a Wikipedia article", prompt)
+
+    def test_build_user_prompt_requests_paraphrase_when_context_present(self) -> None:
+        prompt = build_user_prompt("who was adolf hitler?", "[context]")
+        self.assertIn("Paraphrase the source material in your own wording", prompt)
 
     def test_fetch_kiwix_article_text_falls_back_to_content_route(self) -> None:
         def fake_http_text(url: str, timeout: int = 60) -> str:
@@ -310,6 +376,30 @@ class ChatCliTests(unittest.TestCase):
         self.assertTrue(is_usable_answer("Adolf Hitler was the dictator of Nazi Germany."))
         self.assertFalse(is_usable_answer("I do not know."))
 
+    def test_overrelies_on_professional_care_rejects_unconditional_referral(self) -> None:
+        answer = (
+            "Clean the wound thoroughly and monitor for spreading redness. "
+            "If you notice severe symptoms, you must seek medical attention immediately."
+        )
+        self.assertTrue(overrelies_on_professional_care(answer))
+        self.assertFalse(is_usable_answer(answer))
+
+    def test_overrelies_on_professional_care_rejects_immediate_medical_care_variant(self) -> None:
+        answer = (
+            "Clean the wound thoroughly and monitor for spreading redness. "
+            "While you manage the wound at home, if you notice any of these signs, you must seek immediate medical care."
+        )
+        self.assertTrue(overrelies_on_professional_care(answer))
+        self.assertFalse(is_usable_answer(answer))
+
+    def test_overrelies_on_professional_care_allows_conditional_note(self) -> None:
+        answer = (
+            "Clean the wound thoroughly, flush out debris, and monitor for worsening redness or fever. "
+            "If skilled medical help is available, get evaluation for a contaminated puncture wound."
+        )
+        self.assertFalse(overrelies_on_professional_care(answer))
+        self.assertTrue(is_usable_answer(answer))
+
     def test_has_truncated_tail_detects_dangling_fragment(self) -> None:
         self.assertTrue(has_truncated_tail("Adolf Hitler was the dictator of Germany from 1933 to 1945. His"))
         self.assertFalse(has_truncated_tail("Adolf Hitler was the dictator of Germany from 1933 to 1945."))
@@ -359,6 +449,82 @@ class ChatCliTests(unittest.TestCase):
             )
 
         self.assertIn("Austrian-born German politician", answer)
+
+    def test_ask_llama_records_raw_attempts_for_debug(self) -> None:
+        responses = [
+            {
+                "choices": [
+                    {
+                        "message": {"content": "Too short."},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "Adolf Hitler was an Austrian-born German politician who led Nazi Germany from 1933 to 1945. "
+                                "He was central to the rise of Nazism and the start of World War II."
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        ]
+        attempts: list[dict] = []
+
+        with patch("src.cli.chat.http_json", side_effect=responses):
+            answer = ask_llama(
+                llama_url="http://localhost:8081",
+                model_name="gemma-4-E4B-it-Q5_K_M",
+                question="who was adolf hitler?",
+                context="",
+                history=[],
+                max_tokens=384,
+                timeout=60,
+                debug_attempts=attempts,
+            )
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["stage"], "initial")
+        self.assertEqual(attempts[0]["answer"], "Too short.")
+        self.assertEqual(attempts[0]["raw_answer"], "Too short.")
+        self.assertEqual(attempts[1]["stage"], "retry")
+        self.assertIn("Austrian-born German politician", answer)
+
+    def test_ask_llama_disables_thinking_budget(self) -> None:
+        captured_payloads: list[dict] = []
+
+        def fake_http_json(method: str, url: str, payload: dict | None = None, timeout: int = 60) -> dict:
+            assert payload is not None
+            captured_payloads.append(payload)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Adolf Hitler was an Austrian-born German politician who led Nazi Germany from 1933 to 1945. He was central to the rise of Nazism and the start of World War II."
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+        with patch("src.cli.chat.http_json", side_effect=fake_http_json):
+            answer = ask_llama(
+                llama_url="http://localhost:8081",
+                model_name="gemma-4-E4B-it-Q5_K_M",
+                question="who was adolf hitler?",
+                context="",
+                history=[],
+                max_tokens=384,
+                timeout=60,
+            )
+
+        self.assertIn("Austrian-born German politician", answer)
+        self.assertEqual(captured_payloads[0]["thinking_budget_tokens"], 0)
 
 
 if __name__ == "__main__":
