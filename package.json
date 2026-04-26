@@ -9,15 +9,18 @@
     "typecheck": "bunx tsc --noEmit",
     "db:generate": "bunx prisma generate",
     "db:migrate": "bunx prisma migrate dev",
-    "db:push": "bunx prisma db push"
+    "db:push": "bunx prisma db push",
+    "db:seed": "bun run src/backend/seed.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "prisma": "^6.0.0",
     "typescript": "^5"
   },
   "dependencies": {
+    "@prisma/client": "^6.0.0",
     "react": "19",
     "react-dom": "19",
     "react-router": "7"

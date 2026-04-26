@@ -1,5 +1,6 @@
 import { resolve, join, extname } from 'path'
 import { existsSync, statSync } from 'fs'
+import { handleAuth } from './routes/auth.js'
 
 const PORT = Number(process.env.ELFIN_PORT ?? 8085)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
@@ -42,6 +43,9 @@ const server = Bun.serve({
 
     // API routes
     if (path.startsWith('/api/')) {
+      const authRes = await handleAuth(req, path)
+      if (authRes) return authRes
+
       if (path === '/api/health' && req.method === 'GET') {
         return Response.json({ status: 'healthy', version: '0.1.0' })
       }

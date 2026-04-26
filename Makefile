@@ -9,6 +9,16 @@ MAX_WAIT_SECS ?= 60
 CHAT_MODEL ?= gemma-4-E4B-it-Q5_K_M.gguf
 CHAT_MMPROJ ?= mmproj-F16.gguf
 EMBED_MODEL ?= nomic-embed-text-v1.5.Q8_0.gguf
+CHAT_ARGS ?=
+FINETUNE_CONFIG ?= ./config/training/elfin-gemma4-local.example.json
+FINETUNE_RUN_DIR ?= ./artifacts/training/elfin-gemma4-local
+FINETUNE_OUTPUT ?= ./artifacts/training/elfin-gemma4-local-q4_k_m.gguf
+FINETUNE_BASELINE_REPORT ?= ./data/evals/baseline-report.json
+FINETUNE_TUNED_REPORT ?= ./data/evals/tuned-report.json
+FINETUNE_GEN_ARGS ?=
+FINETUNE_TRAIN_ARGS ?=
+FINETUNE_EXPORT_ARGS ?=
+VISION_ARGS ?=
 
 define wait_for_http
 	@for i in $$(seq 1 $(MAX_WAIT_SECS)); do \
@@ -24,7 +34,7 @@ define wait_for_http
 	exit 1
 endef
 
-.PHONY: help ensure-venv dev build build-frontend dev-frontend typecheck setup setup-python clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run
+.PHONY: help ensure-venv dev build build-frontend dev-frontend typecheck setup setup-python setup-training clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat vision debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run finetune-dataset finetune-generate finetune-validate finetune-train finetune-train-validate finetune-smoke finetune-export finetune-eval db-generate db-push db-migrate db-studio db-seed
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -78,6 +88,49 @@ ingest-validate: ## Validate source corpus and write manifest
 train-validate: ## Validate fine-tune dataset and write summary
 	$(PYTHON) src/training/validate_dataset.py
 
+finetune-dataset: ## Build passage manifest from local corpus (PDF/MD)
+	$(PYTHON) -m src.training.dataset_builder \
+		--source-dir ./data/datasets/raw \
+		--out ./data/training/passage-manifest.jsonl \
+		--summary-out ./data/training/passage-summary.json
+
+finetune-generate: ## Synthesize SFT dataset via OpenRouter (requires OPENROUTER_API_KEY)
+	$(PYTHON) -m src.training.generate_sft_dataset \
+		--manifest ./data/training/passage-manifest.jsonl \
+		--out ./datasets/training/synthetic/openrouter.jsonl \
+		$(FINETUNE_GEN_ARGS)
+
+finetune-validate: ## Validate SFT dataset, detect duplicates/policy violations, emit splits
+	$(PYTHON) -m src.training.validate_dataset \
+		--dataset-dir ./datasets/training \
+		--out ./data/training/dataset-summary.json \
+		--splits-out ./datasets/training/splits
+
+finetune-train: ## Run local LoRA SFT (requires config path via FINETUNE_CONFIG)
+	$(PYTHON) -m src.training.train --config $(FINETUNE_CONFIG) $(FINETUNE_TRAIN_ARGS)
+
+finetune-train-validate: ## Validate training config + dataset without running training
+	$(PYTHON) -m src.training.train --config $(FINETUNE_CONFIG) --skip-train
+
+finetune-smoke: ## Validate dataset + config and write run metadata without training
+	$(PYTHON) -m src.training.validate_dataset \
+		--dataset-dir ./datasets/training \
+		--out ./data/training/dataset-summary.json \
+		--splits-out ./datasets/training/splits
+	$(PYTHON) -m src.training.train --config $(FINETUNE_CONFIG) --skip-train
+
+finetune-export: ## Merge LoRA adapter and export GGUF artifact with metadata
+	$(PYTHON) -m src.training.export \
+		--run-dir $(FINETUNE_RUN_DIR) \
+		--output $(FINETUNE_OUTPUT) \
+		$(FINETUNE_EXPORT_ARGS)
+
+finetune-eval: ## Compare baseline vs tuned eval reports and decide promotion
+	$(PYTHON) -m src.training.eval \
+		--baseline-report $(FINETUNE_BASELINE_REPORT) \
+		--tuned-report $(FINETUNE_TUNED_REPORT) \
+		--out ./data/training/eval-gate.json
+
 test: test-contracts ## Run default test suite
 
 test-contracts: ## Run no-docker contract tests
@@ -123,10 +176,32 @@ chat: ## Start Docker services and open interactive cited RAG chat
 	$(call wait_for_http,http://localhost:6333/healthz,Qdrant,qdrant)
 	@echo "Waiting for Kiwix..."
 	$(call wait_for_http,http://localhost:8083/catalog/v2/root.xml,Kiwix,kiwix)
-	$(PYTHON) src/cli/chat.py
+	$(PYTHON) src/cli/chat.py $(CHAT_ARGS)
+
+vision: ## Start Docker services and run multimodal vision test on an image
+	@echo "Starting llama-server via Docker..."
+	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) docker compose up -d llama-server
+	@echo "Waiting for llama-server..."
+	$(call wait_for_http,http://localhost:8081/health,llama-server,llama-server)
+	$(PYTHON) src/cli/vision.py --image "$(IMAGE)" $(VISION_ARGS)
 
 debug-kiwix: ## Probe local Kiwix search/article paths for a query
 	$(PYTHON) src/infra/debug_kiwix.py
+
+db-generate: ## Generate Prisma client from schema
+	$(BUN) x prisma generate
+
+db-push: ## Push schema to SQLite database (dev)
+	$(BUN) x prisma db push
+
+db-migrate: ## Create and apply Prisma migration
+	$(BUN) x prisma migrate dev
+
+db-studio: ## Open Prisma Studio GUI
+	$(BUN) x prisma studio
+
+db-seed: ## Seed initial admin user
+	$(BUN) run src/backend/seed.ts
 
 verify-slice1: ## Verify Slice 1 config and local assets
 	$(PYTHON) src/infra/verify_slice1.py
@@ -173,6 +248,9 @@ setup: ensure-venv ## Create venv, install Python deps, install Bun deps
 
 setup-python: ensure-venv ## Create venv and install Python deps only
 	$(PIP) install -r requirements.txt
+
+setup-training: ensure-venv ## Install optional local fine-tuning dependencies
+	$(PIP) install -r requirements-training.txt
 
 clean: ## Remove generated build/test artifacts (keeps data/models qdrant zim media)
 	rm -rf static/dist .pytest_cache data/evals data/ingestion data/training
