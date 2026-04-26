@@ -1,0 +1,95 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash      String
+  mustChangePassword Boolean  @default(false)
+  role              String   @default("user") // "admin" | "user"
+  createdAt         DateTime @default(now())
+  baseline          String?  // JSON stringified health baseline interview data
+
+  journalEntries JournalEntry[]
+  checkIns       CheckIn[]
+  notes          Note[]
+  photos         Photo[]
+  chatMessages   ChatMessage[]
+}
+
+model JournalEntry {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content      String   // User's journal text
+  date         DateTime @default(now())
+  aiSummary    String?  // AI-generated summary
+  aiCategories String?  // JSON stringified AI categorization
+  createdAt    DateTime @default(now())
+
+  @@index([userId, date])
+}
+
+model CheckIn {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date          DateTime @default(now())
+  questions     String   // JSON stringified AI-generated questions
+  responses     String   // JSON stringified user responses
+  aiSummary     String?  // AI analysis
+  mentalScore   Float?   // 1-10
+  physicalScore Float?   // 1-10
+  staminaScore  Float?   // 1-10
+  categories    String?  // JSON stringified additional AI-detected categories
+  createdAt     DateTime @default(now())
+
+  @@index([userId, date])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([userId, updatedAt])
+}
+
+model Photo {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filename  String
+  path      String
+  caption   String?
+  takenAt   DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String   // "user" | "assistant"
+  content   String
+  sources   String?  // JSON stringified RAG sources
+  images    String?  // JSON stringified attached image paths
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}

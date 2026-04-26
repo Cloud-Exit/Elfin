@@ -1,6 +1,8 @@
 import { resolve, join, extname } from 'path'
 import { existsSync, statSync } from 'fs'
 import { handleAuth } from './routes/auth.js'
+import { handleJournal } from './routes/journal.js'
+import { handleCheckins } from './routes/checkins.js'
 
 const PORT = Number(process.env.ELFIN_PORT ?? 8085)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
@@ -45,6 +47,12 @@ const server = Bun.serve({
     if (path.startsWith('/api/')) {
       const authRes = await handleAuth(req, path)
       if (authRes) return authRes
+
+      const journalRes = await handleJournal(req, path)
+      if (journalRes) return journalRes
+
+      const checkinRes = await handleCheckins(req, path)
+      if (checkinRes) return checkinRes
 
       if (path === '/api/health' && req.method === 'GET') {
         return Response.json({ status: 'healthy', version: '0.1.0' })

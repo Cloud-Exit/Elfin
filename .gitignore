@@ -24,3 +24,6 @@ i./plugins
 .claude
 .codex
 .agents
+
+unsloth
+trainer-example

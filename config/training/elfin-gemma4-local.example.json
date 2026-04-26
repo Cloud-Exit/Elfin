@@ -1,0 +1,30 @@
+{
+  "base_model": "./data/training/base-model/google-gemma-4-E4B-it",
+  "dataset_dir": "./datasets/training/splits",
+  "output_dir": "./artifacts/training/elfin-gemma4-local",
+  "splits": [
+    "train"
+  ],
+  "max_seq_length": 2048,
+  "learning_rate": 0.0002,
+  "num_train_epochs": 2.0,
+  "per_device_batch_size": 2,
+  "gradient_accumulation_steps": 8,
+  "warmup_ratio": 0.05,
+  "weight_decay": 0.0,
+  "seed": 7,
+  "lora": {
+    "r": 16,
+    "alpha": 32,
+    "dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ]
+  }
+}
