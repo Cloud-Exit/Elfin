@@ -25,5 +25,12 @@ i./plugins
 .codex
 .agents
 
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
 unsloth
 trainer-example
