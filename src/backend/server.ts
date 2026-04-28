@@ -3,9 +3,17 @@ import { existsSync, statSync } from 'fs'
 import { handleAuth } from './routes/auth.js'
 import { handleJournal } from './routes/journal.js'
 import { handleCheckins } from './routes/checkins.js'
+import { handleBaseline } from './routes/baseline.js'
+import { setCheckinService, LlamaCheckinService, DeterministicCheckinService } from './checkinService.js'
 
 const PORT = Number(process.env.ELFIN_PORT ?? 8085)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
+
+const INFERENCE_ENDPOINT = process.env.ELFIN_INFERENCE_ENDPOINT
+if (INFERENCE_ENDPOINT) {
+  setCheckinService(new LlamaCheckinService(INFERENCE_ENDPOINT, new DeterministicCheckinService()))
+  console.log(`elfin AI check-in enabled: ${INFERENCE_ENDPOINT}`)
+}
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -53,6 +61,9 @@ const server = Bun.serve({
 
       const checkinRes = await handleCheckins(req, path)
       if (checkinRes) return checkinRes
+
+      const baselineRes = await handleBaseline(req, path)
+      if (baselineRes) return baselineRes
 
       if (path === '/api/health' && req.method === 'GET') {
         return Response.json({ status: 'healthy', version: '0.1.0' })
