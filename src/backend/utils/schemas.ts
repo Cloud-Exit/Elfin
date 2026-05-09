@@ -107,3 +107,9 @@ export const checkinRespondSchema = z.object({
   },
   { message: 'questions are required unless promptId is provided', path: ['questions'] },
 )
+
+export const chatMessageCreateSchema = z.object({
+  message: z.string().trim().min(1),
+  sources: z.array(z.unknown()).optional(),
+  images: z.array(z.string().max(4096)).max(4).optional(),
+})
