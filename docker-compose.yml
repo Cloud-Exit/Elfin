@@ -1,34 +1,91 @@
 services:
   # LLM inference — Gemma 4 E4B (OpenAI-compatible API)
+  # Image override per host:
+  #   RK3588 Mali GPU: LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan
+  #   NVIDIA (e.g. RTX 5090): LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+  #   AMD ROCm: LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-rocm
+  #   CPU only: LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server (set LLAMA_NGL=0)
   llama-server:
-    image: ghcr.io/ggml-org/llama.cpp:server@sha256:d4ad514993d6b77e09acc3f19c93401366af13c1a2474ae752748ddbfec399e7
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-vulkan}
     ports:
       - "8081:8081"
     volumes:
       - ./data/models:/models:ro
-    command: >
-      -m /models/${CHAT_MODEL:-gemma-4-E4B-it-Q5_K_M.gguf}
-      --mmproj /models/${CHAT_MMPROJ:-mmproj-F16.gguf}
-      --port 8081
-      --host 0.0.0.0
-      -c ${CHAT_CTX_SIZE:-8192}
-      -ngl 0
+    environment:
+      - CHAT_MODEL=${CHAT_MODEL:-gemma-4-E4B-it-Q4_K_M.gguf}
+      - CHAT_CTX_SIZE=${CHAT_CTX_SIZE:-4096}
+      - LLAMA_NGL=${LLAMA_NGL:-99}
+      - LLAMA_THREADS=${LLAMA_THREADS:-4}
+      - LLAMA_CPU_MASK=${LLAMA_CPU_MASK-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        exec /app/llama-server
+        -m /models/$$CHAT_MODEL
+        --port 8081
+        --host 0.0.0.0
+        -c $$CHAT_CTX_SIZE
+        -ngl $$LLAMA_NGL
+        -fa on
+        --threads $$LLAMA_THREADS
+        $${LLAMA_CPU_MASK:+--cpu-mask $$LLAMA_CPU_MASK}
+        --cache-type-k q8_0
+        --cache-type-v q8_0
     restart: unless-stopped
+
+  # Vision inference — Gemma 4 E4B + mmproj (separate slot, only spun for image turns)
+  llama-vision:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-vulkan}
+    ports:
+      - "8084:8084"
+    volumes:
+      - ./data/models:/models:ro
+    environment:
+      - CHAT_MODEL=${CHAT_MODEL:-gemma-4-E4B-it-Q4_K_M.gguf}
+      - CHAT_MMPROJ=${CHAT_MMPROJ:-mmproj-F16.gguf}
+      - VISION_CTX_SIZE=${VISION_CTX_SIZE:-4096}
+      - LLAMA_NGL=${LLAMA_NGL:-99}
+      - LLAMA_THREADS=${LLAMA_THREADS:-4}
+      - LLAMA_CPU_MASK=${LLAMA_CPU_MASK-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        exec /app/llama-server
+        -m /models/$$CHAT_MODEL
+        --mmproj /models/$$CHAT_MMPROJ
+        --port 8084
+        --host 0.0.0.0
+        -c $$VISION_CTX_SIZE
+        -ngl $$LLAMA_NGL
+        -fa on
+        --threads $$LLAMA_THREADS
+        $${LLAMA_CPU_MASK:+--cpu-mask $$LLAMA_CPU_MASK}
+    restart: unless-stopped
+    profiles: ["vision"]
 
   # Embedding model — nomic-embed-text (OpenAI-compatible API)
   llama-embed:
-    image: ghcr.io/ggml-org/llama.cpp:server@sha256:d4ad514993d6b77e09acc3f19c93401366af13c1a2474ae752748ddbfec399e7
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-vulkan}
     ports:
       - "8082:8082"
     volumes:
       - ./data/models:/models:ro
-    command: >
-      -m /models/${EMBED_MODEL:-nomic-embed-text-v1.5.Q8_0.gguf}
-      --port 8082
-      --host 0.0.0.0
-      -c ${EMBED_CTX_SIZE:-8192}
-      --embedding
-      -ngl 0
+    environment:
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text-v1.5.Q8_0.gguf}
+      - EMBED_CTX_SIZE=${EMBED_CTX_SIZE:-2048}
+      - LLAMA_NGL=${LLAMA_NGL:-99}
+      - LLAMA_EMBED_THREADS=${LLAMA_EMBED_THREADS:-2}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        exec /app/llama-server
+        -m /models/$$EMBED_MODEL
+        --port 8082
+        --host 0.0.0.0
+        -c $$EMBED_CTX_SIZE
+        --embedding
+        -ngl $$LLAMA_NGL
+        --threads $$LLAMA_EMBED_THREADS
     restart: unless-stopped
 
   # Vector database (on-disk storage mode)
@@ -40,6 +97,7 @@ services:
       - ./data/qdrant:/qdrant/storage
     environment:
       - QDRANT__STORAGE__ON_DISK_PAYLOAD=true
+      - QDRANT__TELEMETRY_DISABLED=true
     restart: unless-stopped
 
   # Kiwix — offline encyclopedia server

@@ -34,12 +34,19 @@ define wait_for_http
 	exit 1
 endef
 
-.PHONY: help ensure-venv dev build build-frontend dev-frontend typecheck setup setup-python setup-training clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat vision debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run finetune-dataset finetune-generate finetune-validate finetune-train finetune-train-validate finetune-smoke finetune-export finetune-eval db-generate db-push db-migrate db-studio db-seed
+.PHONY: help ensure-venv dev dev-local dev-remote build build-frontend dev-frontend typecheck setup setup-python setup-training clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat vision debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run finetune-dataset finetune-generate finetune-validate finetune-train finetune-train-validate finetune-smoke finetune-export finetune-eval db-generate db-push db-migrate db-studio db-seed
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-dev: build ## Build frontend, start services, wait for health, run Bun server
+dev: ## Build, start services, run Bun server (remote if ELFIN_REMOTE_HOST/RK1_TARGET set)
+	@if [ -n "$$ELFIN_REMOTE_HOST" ] || [ -n "$$RK1_TARGET" ]; then \
+		$(MAKE) dev-remote; \
+	else \
+		$(MAKE) dev-local; \
+	fi
+
+dev-local: build ## Local: build frontend, start services, wait for health, run Bun server
 	@echo "Starting services..."
 	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) EMBED_MODEL=$(EMBED_MODEL) docker compose up -d llama-server llama-embed qdrant kiwix
 	@echo "Waiting for llama-server..."
@@ -50,8 +57,16 @@ dev: build ## Build frontend, start services, wait for health, run Bun server
 	$(call wait_for_http,http://localhost:6333/healthz,Qdrant,qdrant)
 	@echo "Waiting for Kiwix..."
 	$(call wait_for_http,http://localhost:8083/catalog/v2/root.xml,Kiwix,kiwix)
-	@echo "Starting Elfin on :8085"
+	@echo "Starting Elfin on :8885"
 	$(BUN) run src/backend/server.ts
+
+dev-remote: ## Sync project to RK1 via SSH, run remote stack, watch local files (--watch)
+	@if [ -z "$$ELFIN_REMOTE_HOST" ] || [ -z "$$ELFIN_REMOTE_HOST_USER" ]; then \
+		echo "ERROR: ELFIN_REMOTE_HOST and ELFIN_REMOTE_HOST_USER required"; \
+		echo "Example: ELFIN_REMOTE_HOST=rk1.local ELFIN_REMOTE_HOST_USER=elfin make dev"; \
+		exit 1; \
+	fi
+	bash scripts/dev_remote.sh
 
 services: ## Start Docker services only
 	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) EMBED_MODEL=$(EMBED_MODEL) docker compose up -d

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/backend/server.ts",
-    "build": "bun build src/frontend/main.tsx --outdir static/dist --minify",
+    "build": "NODE_ENV=production bun build src/frontend/main.tsx --outdir static/dist --minify",
     "typecheck": "bunx tsc --noEmit",
     "db:generate": "bunx prisma generate",
     "db:migrate": "bunx prisma migrate dev",

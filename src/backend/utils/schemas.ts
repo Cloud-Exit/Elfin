@@ -108,8 +108,23 @@ export const checkinRespondSchema = z.object({
   { message: 'questions are required unless promptId is provided', path: ['questions'] },
 )
 
+export const chatSessionCreateSchema = z.object({
+  title: z.string().trim().min(1).optional(),
+})
+
 export const chatMessageCreateSchema = z.object({
+  sessionId: z.string().trim().min(1),
   message: z.string().trim().min(1),
   sources: z.array(z.unknown()).optional(),
   images: z.array(z.string().max(4096)).max(4).optional(),
+})
+
+export const noteCreateSchema = z.object({
+  title: z.string().trim().min(1).max(255),
+  content: z.string().trim().min(1),
+})
+
+export const noteUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(255).optional(),
+  content: z.string().trim().min(1).optional(),
 })

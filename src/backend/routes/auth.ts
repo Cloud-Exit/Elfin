@@ -15,6 +15,12 @@ export async function handleAuth(req: Request, path: string): Promise<Response |
     if (path === '/api/auth/change-password' && req.method === 'POST') {
       return await changePassword(req)
     }
+    if (path === '/api/auth/config' && req.method === 'GET') {
+      return await getConfig(req)
+    }
+    if (path === '/api/auth/demo' && req.method === 'POST') {
+      return await startDemo(req)
+    }
     return null
   } catch (err: any) {
     return Response.json({ error: err.message }, { status: 401 })
@@ -100,4 +106,42 @@ async function changePassword(req: Request): Promise<Response> {
   })
 
   return Response.json({ ok: true })
+}
+
+async function getConfig(req: Request): Promise<Response> {
+  return Response.json({
+    demoMode: process.env.DEMO_MODE === 'true'
+  })
+}
+
+async function startDemo(req: Request): Promise<Response> {
+  if (process.env.DEMO_MODE !== 'true') {
+    return Response.json({ error: 'Demo mode is not enabled' }, { status: 403 })
+  }
+
+  const username = `demo_${crypto.randomUUID()}`
+  const password = crypto.randomUUID()
+  const hash = await hashPassword(password)
+
+  const user = await prisma.user.create({
+    data: {
+      username,
+      passwordHash: hash,
+      role: 'user',
+      mustChangePassword: false,
+    },
+  })
+
+  const token = createToken()
+  setSession(token, user.id)
+
+  return Response.json({
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      mustChangePassword: user.mustChangePassword,
+    },
+  })
 }

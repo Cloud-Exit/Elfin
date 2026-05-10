@@ -47,6 +47,7 @@ export async function handleCheckins(req: Request, path: string): Promise<Respon
     if (err.message === 'missing token' || err.message === 'invalid token' || err.message === 'user not found') {
       return Response.json({ error: err.message }, { status: 401 })
     }
+    console.error('Checkin API Error:', err)
     return Response.json({ error: err.message }, { status: 400 })
   }
 }

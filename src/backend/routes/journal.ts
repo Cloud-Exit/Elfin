@@ -19,6 +19,7 @@ export async function handleJournal(req: Request, path: string): Promise<Respons
     if (err.message === 'missing token' || err.message === 'invalid token' || err.message === 'user not found') {
       return Response.json({ error: err.message }, { status: 401 })
     }
+    console.error('Journal API Error:', err)
     return Response.json({ error: err.message }, { status: 400 })
   }
 }

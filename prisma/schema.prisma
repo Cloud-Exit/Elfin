@@ -2,7 +2,8 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -23,6 +24,7 @@ model User {
   checkIns       CheckIn[]
   notes          Note[]
   photos         Photo[]
+  chatSessions   ChatSession[]
   chatMessages   ChatMessage[]
 }
 
@@ -81,15 +83,31 @@ model Photo {
   @@index([userId, createdAt])
 }
 
+model ChatSession {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String   @default("New Chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages  ChatMessage[]
+
+  @@index([userId, updatedAt])
+}
+
 model ChatMessage {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   role      String   // "user" | "assistant"
   content   String
   sources   String?  // JSON stringified RAG sources
   images    String?  // JSON stringified attached image paths
   createdAt DateTime @default(now())
 
+  @@index([sessionId, createdAt])
   @@index([userId, createdAt])
 }

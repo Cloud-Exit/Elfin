@@ -42,6 +42,15 @@ const noteMock = {
   findMany: mock(),
 }
 
+const chatSessionMock = {
+  findMany: mock(),
+  findFirst: mock(),
+  count: mock(),
+  create: mock(),
+  update: mock(),
+  deleteMany: mock(),
+}
+
 const chatMessageMock = {
   findMany: mock(),
   count: mock(),
@@ -60,6 +69,7 @@ mock.module('./db.js', () => ({
     journalEntry: journalEntryMock,
     checkIn: checkInMock,
     note: noteMock,
+    chatSession: chatSessionMock,
     chatMessage: chatMessageMock,
     $transaction: transactionMock,
   },
@@ -77,6 +87,9 @@ mock.module('./utils/schemas.js', () => ({
   },
   chatMessageCreateSchema: {
     safeParse: mockSchemaSafeParse,
+  },
+  chatSessionCreateSchema: {
+    safeParse: (data: unknown) => ({ success: true, data }),
   },
 }))
 
@@ -108,6 +121,19 @@ function reset() {
     createdAt: data.data.createdAt || new Date(),
   }))
   chatMessageMock.findFirst.mockResolvedValue(null)
+  chatMessageMock.deleteMany.mockResolvedValue({ count: 1 })
+  chatSessionMock.findMany.mockResolvedValue([])
+  chatSessionMock.findFirst.mockResolvedValue({ id: 'session-1', userId: mockUserId, title: 'Chat' })
+  chatSessionMock.count.mockResolvedValue(0)
+  chatSessionMock.create.mockImplementation(async (data: any) => ({
+    id: 'session-' + Date.now(),
+    userId: data.data.userId,
+    title: data.data.title,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }))
+  chatSessionMock.update.mockResolvedValue({})
+  chatSessionMock.deleteMany.mockResolvedValue({ count: 1 })
   transactionMock.mockImplementation(async (queries) => {
     return Promise.all(queries.map((q: Promise<any>) => q))
   })
@@ -424,13 +450,27 @@ describe('handleChat', () => {
     expect(res!.status).toBe(404)
   })
 
+  it('lists sessions with pagination', async () => {
+    chatSessionMock.findMany.mockResolvedValue([
+      { id: 's1', title: 'Chat 1', userId: mockUserId, createdAt: new Date(), updatedAt: new Date() },
+    ])
+    chatSessionMock.count.mockResolvedValue(1)
+
+    const res = await handleChat(req('/api/chat/sessions'), '/api/chat/sessions')
+    expect(res).not.toBeNull()
+    expect(res!.status).toBe(200)
+    const body = await res!.json()
+    expect(body.sessions).toHaveLength(1)
+    expect(body.total).toBe(1)
+  })
+
   it('lists messages with pagination', async () => {
     chatMessageMock.findMany.mockResolvedValue([
       { id: 'm1', role: 'user', content: 'Hi', sources: null, images: null, createdAt: new Date() },
     ])
     chatMessageMock.count.mockResolvedValue(1)
 
-    const res = await handleChat(req('/api/chat'), '/api/chat')
+    const res = await handleChat(req('/api/chat/sessions/s1/messages'), '/api/chat/sessions/s1/messages')
     expect(res).not.toBeNull()
     expect(res!.status).toBe(200)
     const body = await res!.json()
@@ -442,12 +482,12 @@ describe('handleChat', () => {
     chatMessageMock.findMany.mockResolvedValue([])
 
     const res = await handleChat(
-      req('/api/chat', {
+      req('/api/chat/sessions/s1/messages', {
         method: 'POST',
-        body: JSON.stringify({ message: 'Hello' }),
+        body: JSON.stringify({ sessionId: 's1', message: 'Hello' }),
         headers: { authorization: 'Bearer tok', 'Content-Type': 'application/json' },
       }),
-      '/api/chat',
+      '/api/chat/sessions/s1/messages',
     )
     expect(res).not.toBeNull()
     expect(res!.status).toBe(201)
@@ -463,12 +503,12 @@ describe('handleChat', () => {
       error: { issues: [{ path: ['message'], message: 'String must contain at least 1 character(s)' }] },
     } as any)
     const res = await handleChat(
-      req('/api/chat', {
+      req('/api/chat/sessions/s1/messages', {
         method: 'POST',
-        body: JSON.stringify({ message: '' }),
+        body: JSON.stringify({ sessionId: 's1', message: '' }),
         headers: { authorization: 'Bearer tok', 'Content-Type': 'application/json' },
       }),
-      '/api/chat',
+      '/api/chat/sessions/s1/messages',
     )
     expect(res).not.toBeNull()
     expect(res!.status).toBe(400)
@@ -478,12 +518,12 @@ describe('handleChat', () => {
     const { handleChat: freshHandleChat } = await import('./routes/chat.js')
     for (let i = 0; i < 25; i++) {
       const res = await freshHandleChat(
-        req('/api/chat', {
+        req('/api/chat/sessions/s1/messages', {
           method: 'POST',
-          body: JSON.stringify({ message: 'test' }),
+          body: JSON.stringify({ sessionId: 's1', message: 'test' }),
           headers: { authorization: 'Bearer tok', 'Content-Type': 'application/json' },
         }),
-        '/api/chat',
+        '/api/chat/sessions/s1/messages',
       )
       if (i >= 20) {
         expect(res).not.toBeNull()
@@ -496,17 +536,17 @@ describe('handleChat', () => {
     const originalService = chatService
     const errorService = {
       generateReply: mock(() => { throw new Error('model unavailable') }),
-    }
+    } as any
     setChatService(errorService)
     chatMessageMock.findMany.mockResolvedValue([])
     try {
       const res = await handleChat(
-        req('/api/chat', {
+        req('/api/chat/sessions/s1/messages', {
           method: 'POST',
-          body: JSON.stringify({ message: 'test' }),
+          body: JSON.stringify({ sessionId: 's1', message: 'test' }),
           headers: { authorization: 'Bearer tok', 'Content-Type': 'application/json' },
         }),
-        '/api/chat',
+        '/api/chat/sessions/s1/messages',
       )
       expect(res).not.toBeNull()
       expect(res!.status).toBe(201)
@@ -517,37 +557,13 @@ describe('handleChat', () => {
     }
   })
 
-  it('gets single message by ID', async () => {
-    chatMessageMock.findFirst.mockResolvedValue({
-      id: 'm1',
-      role: 'user',
-      content: 'Hello',
-      sources: null,
-      images: null,
-      createdAt: new Date(),
-    })
-
-    const res = await handleChat(req('/api/chat/m1'), '/api/chat/m1')
-    expect(res).not.toBeNull()
-    expect(res!.status).toBe(200)
-    const body = await res!.json()
-    expect(body.message.id).toBe('m1')
-  })
-
-  it('returns 404 for non-existent message', async () => {
-    chatMessageMock.findFirst.mockResolvedValue(null)
-    const res = await handleChat(req('/api/chat/nonexistent'), '/api/chat/nonexistent')
-    expect(res).not.toBeNull()
-    expect(res!.status).toBe(404)
-  })
-
-  it('deletes message', async () => {
-    chatMessageMock.findFirst.mockResolvedValue({ id: 'm1', userId: mockUserId })
-    chatMessageMock.deleteMany.mockResolvedValue({ count: 1 })
+  it('deletes session', async () => {
+    chatSessionMock.findFirst.mockResolvedValue({ id: 's1', userId: mockUserId })
+    chatSessionMock.deleteMany.mockResolvedValue({ count: 1 })
 
     const res = await handleChat(
-      req('/api/chat/m1', { method: 'DELETE' }),
-      '/api/chat/m1',
+      req('/api/chat/sessions/s1', { method: 'DELETE' }),
+      '/api/chat/sessions/s1',
     )
     expect(res).not.toBeNull()
     expect(res!.status).toBe(200)
@@ -557,26 +573,26 @@ describe('handleChat', () => {
 
   it('returns 401 for auth errors', async () => {
     requireAuthMock.mockRejectedValue(new Error('missing token'))
-    const res = await handleChat(req('/api/chat'), '/api/chat')
+    const res = await handleChat(req('/api/chat/sessions'), '/api/chat/sessions')
     expect(res).not.toBeNull()
     expect(res!.status).toBe(401)
   })
 
   it('returns 500 for unexpected errors', async () => {
     requireAuthMock.mockRejectedValue(new Error('database connection failed'))
-    const res = await handleChat(req('/api/chat'), '/api/chat')
+    const res = await handleChat(req('/api/chat/sessions'), '/api/chat/sessions')
     expect(res).not.toBeNull()
     expect(res!.status).toBe(500)
   })
 
-  it('scopes messages to authenticated user', async () => {
-    await handleChat(req('/api/chat'), '/api/chat')
-    expect(chatMessageMock.findMany).toHaveBeenCalledWith({
+  it('scopes sessions to authenticated user', async () => {
+    await handleChat(req('/api/chat/sessions'), '/api/chat/sessions')
+    expect(chatSessionMock.findMany).toHaveBeenCalledWith({
       where: { userId: mockUserId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { updatedAt: 'desc' },
       take: expect.any(Number),
       skip: expect.any(Number),
-      select: expect.objectContaining({ id: true, role: true, content: true }),
+      select: expect.objectContaining({ id: true, title: true }),
     })
   })
 })

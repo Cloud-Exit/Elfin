@@ -5,8 +5,12 @@ import { handleJournal } from './routes/journal.js'
 import { handleCheckins } from './routes/checkins.js'
 import { handleBaseline } from './routes/baseline.js'
 import { handleChat } from './routes/chat.js'
+import { handleNote } from './routes/note.js'
+import { handleKiwix } from './routes/kiwix.js'
+import { handleSources } from './routes/sources.js'
 import { setCheckinService, LlamaCheckinService, DeterministicCheckinService } from './checkinService.js'
 import { setChatService, LlamaChatService, DeterministicChatService } from './chatService.js'
+import { prisma } from './db.js'
 
 const PORT = Number(process.env.ELFIN_PORT ?? 8885)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
@@ -72,6 +76,15 @@ const server = Bun.serve({
       const chatRes = await handleChat(req, path)
       if (chatRes) return chatRes
 
+      const noteRes = await handleNote(req, path)
+      if (noteRes) return noteRes
+
+      const kiwixRes = await handleKiwix(req, path)
+      if (kiwixRes) return kiwixRes
+
+      const sourcesRes = await handleSources(req, path)
+      if (sourcesRes) return sourcesRes
+
       if (path === '/api/health' && req.method === 'GET') {
         return Response.json({ status: 'healthy', version: '0.1.0' })
       }
@@ -96,3 +109,24 @@ const server = Bun.serve({
 })
 
 console.log(`elfin listening on http://localhost:${server.port}`)
+
+// Background worker to clean up demo users after 24 hours
+if (process.env.DEMO_MODE === 'true') {
+  console.log('Demo mode enabled. Starting cleanup worker.')
+  setInterval(async () => {
+    try {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+      const result = await prisma.user.deleteMany({
+        where: {
+          username: { startsWith: 'demo_' },
+          createdAt: { lt: twentyFourHoursAgo },
+        },
+      })
+      if (result.count > 0) {
+        console.log(`Cleaned up ${result.count} expired demo user(s).`)
+      }
+    } catch (err) {
+      console.error('Failed to run demo user cleanup:', err)
+    }
+  }, 60 * 60 * 1000) // Run every hour
+}
