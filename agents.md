@@ -78,6 +78,8 @@ Bun runs the HTTP server, builds the frontend, manages the database via Prisma. 
 
 Ollama wraps llama.cpp with model management we don't need. Our models are GGUF files on disk — no registry, no pulling. llama-server exposes OpenAI-compatible `/v1/` APIs natively.
 
+The RK1 runtime currently uses the CPU llama.cpp GGUF path. `LLAMA_NGL` and the Vulkan image are GPU-layer controls, not RK3588 NPU support. Real NPU acceleration must be implemented as a separate RKLLM/RKNN backend with converted model artifacts and an OpenAI-compatible adapter.
+
 ### Qdrant over ChromaDB
 
 ChromaDB stores vectors in RAM. On a 16 GB device running an 8 GB LLM, that's fatal. Qdrant with `on_disk: true` keeps everything on NVMe, using ~100 MB RAM.

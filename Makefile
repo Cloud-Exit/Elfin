@@ -6,7 +6,8 @@ BOOTSTRAP_PYTHON ?= $(shell command -v python3.12 || command -v python3.13 || co
 BUN ?= bun
 PIP ?= $(VENV)/bin/pip
 MAX_WAIT_SECS ?= 60
-CHAT_MODEL ?= gemma-4-E4B-it-Q5_K_M.gguf
+TARGET ?= local
+CHAT_MODEL ?= gemma-4-E2B-it-IQ4_XS.gguf
 CHAT_MMPROJ ?= mmproj-F16.gguf
 EMBED_MODEL ?= nomic-embed-text-v1.5.Q8_0.gguf
 CHAT_ARGS ?=
@@ -34,23 +35,68 @@ define wait_for_http
 	exit 1
 endef
 
-.PHONY: help ensure-venv dev dev-local dev-remote build build-frontend dev-frontend typecheck setup setup-python setup-training clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat vision debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run finetune-dataset finetune-generate finetune-validate finetune-train finetune-train-validate finetune-smoke finetune-export finetune-eval db-generate db-push db-migrate db-studio db-seed
+define wait_for_llm
+	@for i in $$(seq 1 $(MAX_WAIT_SECS)); do \
+		curl -sf http://localhost:8081/health > /dev/null 2>&1 && exit 0; \
+		printf '.'; \
+		sleep 1; \
+	done; \
+	echo ""; \
+	echo "Timed out waiting for llama-server"; \
+	if [ "$(TARGET)" = "rockchip" ]; then \
+		echo "--- recent logs: rk-llama.cpp ---"; \
+		tail -200 data/logs/rk-llama-server.log 2>/dev/null || true; \
+	else \
+		docker compose ps llama-server || true; \
+		echo "--- recent logs: llama-server ---"; \
+		docker compose logs --tail=200 llama-server || true; \
+	fi; \
+	exit 1
+endef
+
+define start_llm
+	@if [ "$(TARGET)" = "rockchip" ]; then \
+		echo "Starting rk-llama.cpp RKNPU2 llama-server..."; \
+		docker compose rm -sf llama-server >/dev/null 2>&1 || true; \
+		bash scripts/rk_llama_cpp.sh server-bg; \
+	else \
+		echo "Starting llama-server via Docker..."; \
+		CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) docker compose up -d llama-server; \
+	fi
+endef
+
+define start_rag_services
+	@if [ "$(TARGET)" = "rockchip" ]; then \
+		echo "Starting llama-embed + Qdrant + Kiwix via Docker; llama-server via rk-llama.cpp..."; \
+		docker compose rm -sf llama-server >/dev/null 2>&1 || true; \
+		EMBED_MODEL=$(EMBED_MODEL) docker compose up -d llama-embed qdrant kiwix; \
+		bash scripts/rk_llama_cpp.sh server-bg; \
+	else \
+		echo "Starting llama-server + llama-embed + Qdrant + Kiwix via Docker..."; \
+		CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) EMBED_MODEL=$(EMBED_MODEL) docker compose up -d llama-server llama-embed qdrant kiwix; \
+	fi
+endef
+
+.PHONY: help ensure-venv dev dev-local dev-remote build build-frontend dev-frontend typecheck setup setup-python setup-training clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-remote ingest-remote-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat vision debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run finetune-dataset finetune-generate finetune-validate finetune-train finetune-train-validate finetune-smoke finetune-export finetune-eval db-generate db-push db-migrate db-studio db-seed
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-dev: ## Build, start services, run Bun server (remote if ELFIN_REMOTE_HOST/RK1_TARGET set)
+dev: ## Build, start services, run Bun server (set TARGET=rockchip for RK1 NPU backend)
 	@if [ -n "$$ELFIN_REMOTE_HOST" ] || [ -n "$$RK1_TARGET" ]; then \
-		$(MAKE) dev-remote; \
+		if [ -n "$$RK1_TARGET" ] && [ -z "$$TARGET" ]; then \
+			TARGET=rockchip $(MAKE) dev-remote; \
+		else \
+			$(MAKE) dev-remote; \
+		fi; \
 	else \
 		$(MAKE) dev-local; \
 	fi
 
-dev-local: build ## Local: build frontend, start services, wait for health, run Bun server
-	@echo "Starting services..."
-	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) EMBED_MODEL=$(EMBED_MODEL) docker compose up -d llama-server llama-embed qdrant kiwix
+dev-local: build ## Local: build frontend, start target services, wait for health, run Bun server
+	$(call start_rag_services)
 	@echo "Waiting for llama-server..."
-	$(call wait_for_http,http://localhost:8081/health,llama-server,llama-server)
+	$(call wait_for_llm)
 	@echo "Waiting for llama-embed..."
 	$(call wait_for_http,http://localhost:8082/health,llama-embed,llama-embed)
 	@echo "Waiting for Qdrant..."
@@ -60,7 +106,7 @@ dev-local: build ## Local: build frontend, start services, wait for health, run 
 	@echo "Starting Elfin on :8885"
 	$(BUN) run src/backend/server.ts
 
-dev-remote: ## Sync project to RK1 via SSH, run remote stack, watch local files (--watch)
+dev-remote: ## Sync project to RK1 via SSH, run target stack, watch local files (--watch)
 	@if [ -z "$$ELFIN_REMOTE_HOST" ] || [ -z "$$ELFIN_REMOTE_HOST_USER" ]; then \
 		echo "ERROR: ELFIN_REMOTE_HOST and ELFIN_REMOTE_HOST_USER required"; \
 		echo "Example: ELFIN_REMOTE_HOST=rk1.local ELFIN_REMOTE_HOST_USER=elfin make dev"; \
@@ -68,8 +114,8 @@ dev-remote: ## Sync project to RK1 via SSH, run remote stack, watch local files 
 	fi
 	bash scripts/dev_remote.sh
 
-services: ## Start Docker services only
-	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) EMBED_MODEL=$(EMBED_MODEL) docker compose up -d
+services: ## Start target services only
+	$(call start_rag_services)
 
 download-assets: ## Download runtime models, raw docs, training base model, and ZIM assets
 	bash scripts/download_assets.sh
@@ -93,6 +139,104 @@ ingest: ## Run ingestion pipeline (requires embed + Qdrant running)
 
 ingest-force: ## Re-ingest all documents
 	$(PYTHON) src/ingestion/pipeline.py --force
+
+ingest-remote: ## Run full ingestion pipeline on remote RK1 (sync raw docs, setup venv, ingest)
+	@if [ -z "$$ELFIN_REMOTE_HOST" ] || [ -z "$$ELFIN_REMOTE_HOST_USER" ]; then \
+		echo "ERROR: ELFIN_REMOTE_HOST and ELFIN_REMOTE_HOST_USER required"; \
+		exit 1; \
+	fi
+	@REMOTE_PATH="$${ELFIN_REMOTE_PATH:-/home/$$ELFIN_REMOTE_HOST_USER/elfin}"; \
+	SSH_PORT="$${ELFIN_REMOTE_PORT:-22}"; \
+	SSH_TARGET="$$ELFIN_REMOTE_HOST_USER@$$ELFIN_REMOTE_HOST"; \
+	SSH_OPTS="-p $$SSH_PORT -o StrictHostKeyChecking=accept-new"; \
+	echo "[ingest-remote] syncing raw docs to $$SSH_TARGET:$$REMOTE_PATH/data/datasets/raw/..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET "mkdir -p $$REMOTE_PATH/data/datasets/raw"; \
+	rsync -az --delete --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./data/datasets/raw/ "$$SSH_TARGET:$$REMOTE_PATH/data/datasets/raw/"; \
+	echo "[ingest-remote] syncing compose + ingestion code..."; \
+	rsync -az --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./docker-compose.yml "$$SSH_TARGET:$$REMOTE_PATH/docker-compose.yml"; \
+	rsync -az --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./src/ingestion/ "$$SSH_TARGET:$$REMOTE_PATH/src/ingestion/"; \
+	rsync -az --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./requirements.txt "$$SSH_TARGET:$$REMOTE_PATH/requirements.txt"; \
+	echo "[ingest-remote] ensuring llama-embed is up to date..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET "cd $$REMOTE_PATH && docker compose up -d --force-recreate llama-embed"; \
+	echo "[ingest-remote] setting up Python venv and running ingestion..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET " \
+		cd $$REMOTE_PATH && \
+		if [ ! -x .venv/bin/pip ]; then \
+			rm -rf .venv; \
+			python3 -m venv .venv 2>/dev/null || { \
+				echo '[ingest-remote] installing python3-venv...'; \
+				if command -v sudo >/dev/null 2>&1; then \
+					sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv; \
+				fi; \
+				rm -rf .venv && python3 -m venv .venv; \
+			}; \
+		fi && \
+		.venv/bin/pip install -q -r requirements.txt && \
+		echo '[ingest-remote] waiting for llama-embed...' && \
+		for i in \$$(seq 1 30); do curl -sf http://localhost:8082/health >/dev/null 2>&1 && break; sleep 1; done && \
+		echo '[ingest-remote] waiting for Qdrant...' && \
+		for i in \$$(seq 1 30); do curl -sf http://localhost:6333/healthz >/dev/null 2>&1 && break; sleep 1; done && \
+		echo '[ingest-remote] running ingestion pipeline...' && \
+		.venv/bin/python src/ingestion/pipeline.py \
+	"; \
+	echo "[ingest-remote] done."
+
+ingest-remote-force: ## Re-ingest all documents on remote RK1 (force re-embed all chunks)
+	@if [ -z "$$ELFIN_REMOTE_HOST" ] || [ -z "$$ELFIN_REMOTE_HOST_USER" ]; then \
+		echo "ERROR: ELFIN_REMOTE_HOST and ELFIN_REMOTE_HOST_USER required"; \
+		exit 1; \
+	fi
+	@REMOTE_PATH="$${ELFIN_REMOTE_PATH:-/home/$$ELFIN_REMOTE_HOST_USER/elfin}"; \
+	SSH_PORT="$${ELFIN_REMOTE_PORT:-22}"; \
+	SSH_TARGET="$$ELFIN_REMOTE_HOST_USER@$$ELFIN_REMOTE_HOST"; \
+	SSH_OPTS="-p $$SSH_PORT -o StrictHostKeyChecking=accept-new"; \
+	echo "[ingest-remote] syncing raw docs to $$SSH_TARGET:$$REMOTE_PATH/data/datasets/raw/..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET "mkdir -p $$REMOTE_PATH/data/datasets/raw"; \
+	rsync -az --delete --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./data/datasets/raw/ "$$SSH_TARGET:$$REMOTE_PATH/data/datasets/raw/"; \
+	echo "[ingest-remote] syncing compose + ingestion code..."; \
+	rsync -az --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./docker-compose.yml "$$SSH_TARGET:$$REMOTE_PATH/docker-compose.yml"; \
+	rsync -az --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./src/ingestion/ "$$SSH_TARGET:$$REMOTE_PATH/src/ingestion/"; \
+	rsync -az --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		./requirements.txt "$$SSH_TARGET:$$REMOTE_PATH/requirements.txt"; \
+	echo "[ingest-remote] ensuring llama-embed is up to date..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET "cd $$REMOTE_PATH && docker compose up -d --force-recreate llama-embed"; \
+	echo "[ingest-remote] force re-ingesting all documents..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET " \
+		cd $$REMOTE_PATH && \
+		if [ ! -x .venv/bin/pip ]; then \
+			rm -rf .venv; \
+			python3 -m venv .venv 2>/dev/null || { \
+				echo '[ingest-remote] installing python3-venv...'; \
+				if command -v sudo >/dev/null 2>&1; then \
+					sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv; \
+				fi; \
+				rm -rf .venv && python3 -m venv .venv; \
+			}; \
+		fi && \
+		.venv/bin/pip install -q -r requirements.txt && \
+		echo '[ingest-remote] waiting for llama-embed...' && \
+		for i in \$$(seq 1 30); do curl -sf http://localhost:8082/health >/dev/null 2>&1 && break; sleep 1; done && \
+		echo '[ingest-remote] waiting for Qdrant...' && \
+		for i in \$$(seq 1 30); do curl -sf http://localhost:6333/healthz >/dev/null 2>&1 && break; sleep 1; done && \
+		echo '[ingest-remote] running ingestion pipeline (--force)...' && \
+		.venv/bin/python src/ingestion/pipeline.py --force \
+	"; \
+	echo "[ingest-remote] done."
 
 ingest-plan: ## Dry-run ingestion planning and write report
 	$(PYTHON) src/ingestion/pipeline.py --dry-run
@@ -157,18 +301,16 @@ test-install-prep: ## Run unit tests for tools/prepare_image.py
 typecheck: ## Run TypeScript type-check
 	$(BUN) x tsc --noEmit
 
-verify-gemma4: ## Start llama-server with Docker and verify Gemma 4 health
-	@echo "Starting llama-server via Docker..."
-	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) docker compose up -d llama-server
+verify-gemma4: ## Start target llama-server and verify Gemma 4 health
+	$(call start_llm)
 	@echo "Waiting for llama-server..."
-	$(call wait_for_http,http://localhost:8081/health,llama-server,llama-server)
+	$(call wait_for_llm)
 	$(PYTHON) src/infra/verify_gemma4.py --no-launch
 
-smoke-gemma4: ## Start llama-server with Docker and run Gemma 4 chat smoke test
-	@echo "Starting llama-server via Docker..."
-	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) docker compose up -d llama-server
+smoke-gemma4: ## Start target llama-server and run Gemma 4 chat smoke test
+	$(call start_llm)
 	@echo "Waiting for llama-server..."
-	$(call wait_for_http,http://localhost:8081/health,llama-server,llama-server)
+	$(call wait_for_llm)
 	$(PYTHON) src/infra/verify_gemma4.py --chat --no-launch
 
 smoke-ingestion-live: ## Start Docker services and run live ingestion smoke test
@@ -180,11 +322,10 @@ smoke-ingestion-live: ## Start Docker services and run live ingestion smoke test
 	$(call wait_for_http,http://localhost:6333/healthz,Qdrant,qdrant)
 	$(PYTHON) src/infra/smoke_ingestion_live.py
 
-chat: ## Start Docker services and open interactive cited RAG chat
-	@echo "Starting llama-server + llama-embed + Qdrant + Kiwix via Docker..."
-	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) EMBED_MODEL=$(EMBED_MODEL) docker compose up -d llama-server llama-embed qdrant kiwix
+chat: ## Start target services and open interactive cited RAG chat
+	$(call start_rag_services)
 	@echo "Waiting for llama-server..."
-	$(call wait_for_http,http://localhost:8081/health,llama-server,llama-server)
+	$(call wait_for_llm)
 	@echo "Waiting for llama-embed..."
 	$(call wait_for_http,http://localhost:8082/health,llama-embed,llama-embed)
 	@echo "Waiting for Qdrant..."
@@ -193,11 +334,10 @@ chat: ## Start Docker services and open interactive cited RAG chat
 	$(call wait_for_http,http://localhost:8083/catalog/v2/root.xml,Kiwix,kiwix)
 	$(PYTHON) src/cli/chat.py $(CHAT_ARGS)
 
-vision: ## Start Docker services and run multimodal vision test on an image
-	@echo "Starting llama-server via Docker..."
-	CHAT_MODEL=$(CHAT_MODEL) CHAT_MMPROJ=$(CHAT_MMPROJ) docker compose up -d llama-server
+vision: ## Start target llama-server and run multimodal vision test on an image
+	$(call start_llm)
 	@echo "Waiting for llama-server..."
-	$(call wait_for_http,http://localhost:8081/health,llama-server,llama-server)
+	$(call wait_for_llm)
 	$(PYTHON) src/cli/vision.py --image "$(IMAGE)" $(VISION_ARGS)
 
 debug-kiwix: ## Probe local Kiwix search/article paths for a query

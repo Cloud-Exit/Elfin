@@ -1,27 +1,19 @@
-import { useState, useEffect } from 'react'
 import { PageHeader } from '../components/PageHeader'
 
-export function EncyclopediaPage() {
-  const [token, setToken] = useState<string | null>(null)
+const KIWIX_PORT = 8083
 
-  useEffect(() => {
-    const t = localStorage.getItem('token')
-    if (t) setToken(t)
-  }, [])
+export function EncyclopediaPage() {
+  const kiwixUrl = `http://${window.location.hostname}:${KIWIX_PORT}`
 
   return (
     <>
       <PageHeader title="Encyclopedia" />
-      <div className="card" style={{ height: 'calc(100% - 60px)', marginTop: '1rem', padding: 0, overflow: 'hidden' }}>
-        {token ? (
-          <iframe 
-            src={`/api/kiwix?token=${token}`} 
-            style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
-            title="Kiwix Encyclopedia"
-          />
-        ) : (
-          <div className="placeholder" style={{ padding: '2rem' }}>Loading token...</div>
-        )}
+      <div style={{ height: 'calc(100% - 60px)', marginTop: '1rem', overflow: 'hidden', border: '1px solid rgba(var(--main), 0.2)' }}>
+        <iframe
+          src={kiwixUrl}
+          style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
+          title="Kiwix Encyclopedia"
+        />
       </div>
     </>
   )

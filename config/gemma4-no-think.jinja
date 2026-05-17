@@ -1,0 +1,15 @@
+{%- for message in messages %}
+{%- if message.role == 'system' %}
+<|turn>system
+{{ message.content }}<turn|>
+{%- elif message.role == 'user' %}
+<|turn>user
+{{ message.content }}<turn|>
+{%- elif message.role == 'assistant' %}
+<|turn>model
+{{ message.content }}<turn|>
+{%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+<|turn>model
+{%- endif %}

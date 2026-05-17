@@ -5,6 +5,7 @@ const EMBED_ENDPOINT = process.env.ELFIN_EMBED_ENDPOINT || 'http://localhost:808
 const QDRANT_ENDPOINT = process.env.QDRANT_URL || 'http://localhost:6333'
 const EMBED_MODEL = process.env.EMBED_MODEL || 'nomic-embed-text-v1.5.Q8_0.gguf'
 const QDRANT_COLLECTION = process.env.QDRANT_COLLECTION || 'elfin_docs'
+const KIWIX_ENDPOINT = process.env.KIWIX_URL || 'http://localhost:8083'
 
 async function embedQuery(text: string): Promise<number[] | null> {
   try {
@@ -41,6 +42,67 @@ async function queryQdrant(vector: number[], limit = 3): Promise<any[]> {
     return data.result?.points || []
   } catch (err) {
     console.error('Failed to query Qdrant:', err)
+    return []
+  }
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#\d+;/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function searchKiwix(query: string, limit = 1): Promise<any[]> {
+  try {
+    const searchUrl = `${KIWIX_ENDPOINT}/search?pattern=${encodeURIComponent(query)}&pageLength=${limit}`
+    const res = await fetch(searchUrl, { signal: AbortSignal.timeout(10_000) })
+    if (!res.ok) return []
+    const html = await res.text()
+
+    const results: any[] = []
+    const linkRegex = /<a[^>]+href="([^"]*\/content\/([^/]+)\/([^"]+))"[^>]*>([^<]*)<\/a>/gi
+    let match
+    while ((match = linkRegex.exec(html)) !== null) {
+      const [, href, book, path, title] = match
+      if (!path || path.includes('search') || !title?.trim()) continue
+      results.push({ book, path: decodeURIComponent(path), title: title.trim(), href })
+    }
+
+    if (results.length === 0) return []
+
+    const articles: any[] = []
+    for (const result of results.slice(0, limit)) {
+      try {
+        const articleUrl = `${KIWIX_ENDPOINT}/content/${encodeURIComponent(result.book)}/${result.path}`
+        const articleRes = await fetch(articleUrl, { signal: AbortSignal.timeout(10_000) })
+        if (!articleRes.ok) continue
+        const articleHtml = await articleRes.text()
+        const text = stripHtml(articleHtml)
+        if (text.length < 100) continue
+        const excerpt = text.slice(0, 600)
+        const source = `kiwix:${result.book}:${result.title}`
+        articles.push({
+          source,
+          text: excerpt,
+          score: null,
+          kiwixPath: `/content/${encodeURIComponent(result.book)}/${result.path}`,
+        })
+        console.log(`  [kiwix] ${source}: ${excerpt.slice(0, 80).replace(/\s+/g, ' ')}`)
+      } catch {
+        continue
+      }
+    }
+    return articles
+  } catch (err) {
+    console.error('Kiwix search failed:', err)
     return []
   }
 }
@@ -124,20 +186,15 @@ export class LlamaChatService implements AIChatService {
   ) {}
 
   private buildSystemPrompt(context: ChatContext): string {
-    let prompt = `You are Elfin, an offline survival assistant. The user is in a disaster, collapse, or apocalypse scenario. Outside help, hospitals, ambulances, and phone networks may be unreachable. The user has only what is on hand.
+    let prompt = `You are Elfin, an offline survival assistant. The user is in a disaster scenario with no outside help, hospitals, or phone networks.
 
-Your job: give practical, field-expedient steps the user can take RIGHT NOW with limited supplies. Be the help that is there.
-
-Hard rules:
-- Never open with a disclaimer. Do NOT say "I am not a medical professional", "I am not a doctor", "I do not have specific protocols", "consult a professional", "this is not medical advice", or any equivalent. These phrases waste time when time is the resource.
-- Never tell the user as the main answer to call emergency services, dial a number, or seek medical attention. Networks and clinics are assumed unavailable.
-- If retrieved context is supplied below, treat it as authoritative survival/medical reference material. Use it. Cite sources inline like [source.pdf#chunk_12] when you state a fact from it.
-- If no retrieved context is supplied, answer from general knowledge. Say plainly when you are uncertain, but still give the best field action you can.
-- Lead with concrete numbered steps. Then a short rationale. Then danger signs to watch for. 4-10 sentences total when the situation is substantive.
-- Paraphrase retrieved material in your own words. Do not copy encyclopedia tone or boilerplate.
-- For injuries and poisonings: prioritize stabilization, decontamination, hydration, hygiene, monitoring, and what to do if it gets worse without outside help.
-- Only mention professional care as a brief conditional aside ("if a clinic is reachable later") AFTER the field-expedient steps.
-- Tone: plainspoken, calm, grounded, decisive. Like a medic in the field, not a hospital intake form.\n\n`
+Rules:
+- Respond as step-by-step instructions. Every response should be numbered action steps the user follows in order.
+- Each step: one clear action with specific details (amounts, timing, materials).
+- After steps: warning signs that mean the situation is getting worse.
+- No disclaimers ("I am not a doctor"), no "call 911", no thinking steps.
+- Cite retrieved sources using their EXACT filename: [actual_filename.pdf#chunk_N].
+- 8-15 steps typical. Be thorough.\n\n`
 
     if (context.baseline && Object.keys(context.baseline).length > 0) {
       prompt += '--- USER HEALTH BASELINE ---\n'
@@ -193,7 +250,7 @@ Hard rules:
         { role: 'system', content: systemPrompt },
       ]
 
-      for (const turn of history.slice(-6)) {
+      for (const turn of history.slice(-4)) {
         messages.push(turn)
       }
       messages.push({ role: 'user', content: message })
@@ -205,7 +262,8 @@ Hard rules:
           model: this.modelName,
           messages,
           temperature,
-          max_tokens: Number(process.env.ELFIN_CHAT_MAX_TOKENS || 512),
+          max_tokens: Number(process.env.ELFIN_CHAT_MAX_TOKENS || 384),
+          reasoning_budget: Number(process.env.ELFIN_CHAT_REASONING_BUDGET ?? -1),
         }),
         signal: AbortSignal.timeout(Number(process.env.ELFIN_CHAT_TIMEOUT_MS || 300_000)),
       })
@@ -237,7 +295,7 @@ Hard rules:
     const sources: any[] = []
     let retrievedContext = ''
     if (vector) {
-      const points = await queryQdrant(vector, 5)
+      const points = await queryQdrant(vector, 3)
       console.log(`Qdrant returned ${points.length} points for query: "${message.slice(0, 80)}"`)
       if (points.length > 0) {
         for (const point of points) {
@@ -247,7 +305,8 @@ Hard rules:
             const chunk = payload.chunk_index != null ? `${src}#chunk_${payload.chunk_index}` : src
             const preview = String(payload.text).slice(0, 80).replace(/\s+/g, ' ')
             console.log(`  [${point.score?.toFixed(3) ?? '?'}] ${chunk}: ${preview}`)
-            retrievedContext += `[Source: ${chunk}]\n${payload.text}\n\n`
+            const truncatedText = String(payload.text).length > 400 ? String(payload.text).slice(0, 400) + '...' : String(payload.text)
+            retrievedContext += `[Source: ${chunk}]\n${truncatedText}\n\n`
             sources.push({ source: chunk, text: payload.text, score: point.score })
           }
         }
@@ -255,25 +314,22 @@ Hard rules:
     } else {
       console.error('Vector was null, skipped Qdrant query.')
     }
+
+    const kiwixResults = await searchKiwix(message, 1)
+    for (const article of kiwixResults) {
+      const truncatedText = article.text.length > 600 ? article.text.slice(0, 600) + '...' : article.text
+      retrievedContext += `[Source: ${article.source}]\n${truncatedText}\n\n`
+      sources.push(article)
+    }
+
     return { sources, retrievedContext }
   }
 
   private buildAugmentedMessage(message: string, sources: any[], retrievedContext: string): string {
     if (sources.length > 0) {
-      return (
-        `RETRIEVED SURVIVAL/MEDICAL REFERENCE (use this — it is on-topic and authoritative):\n\n` +
-        retrievedContext +
-        `--- END REFERENCE ---\n\n` +
-        `Using the reference above, answer the question. Cite sources inline like [source.pdf#chunk_N]. ` +
-        `Lead with concrete numbered steps the user can do right now with limited supplies. No disclaimers.\n\n` +
-        `QUESTION: ${message}`
-      )
+      return `REFERENCE:\n${retrievedContext}---\n${message}`
     }
-    return (
-      `No retrieved reference available for this turn. Answer from general knowledge. ` +
-      `Lead with concrete numbered steps. No disclaimers.\n\n` +
-      `QUESTION: ${message}`
-    )
+    return message
   }
 
   private async *streamLlama(
@@ -284,7 +340,7 @@ Hard rules:
     const messages: Array<{ role: string; content: string }> = [
       { role: 'system', content: systemPrompt },
     ]
-    for (const turn of history.slice(-6)) messages.push(turn)
+    for (const turn of history.slice(-4)) messages.push(turn)
     messages.push({ role: 'user', content: message })
 
     const res = await fetch(`${this.inferenceEndpoint}/v1/chat/completions`, {
@@ -294,8 +350,9 @@ Hard rules:
         model: this.modelName,
         messages,
         temperature: 0.4,
-        max_tokens: Number(process.env.ELFIN_CHAT_MAX_TOKENS || 512),
+        max_tokens: Number(process.env.ELFIN_CHAT_MAX_TOKENS || 384),
         stream: true,
+        reasoning_budget: Number(process.env.ELFIN_CHAT_REASONING_BUDGET ?? -1),
       }),
       signal: AbortSignal.timeout(Number(process.env.ELFIN_CHAT_STREAM_TIMEOUT_MS || 600_000)),
     })

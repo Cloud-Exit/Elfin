@@ -14,6 +14,7 @@ import { prisma } from './db.js'
 
 const PORT = Number(process.env.ELFIN_PORT ?? 8885)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
+const KIWIX_URL = process.env.KIWIX_URL || 'http://localhost:8083'
 
 const INFERENCE_ENDPOINT = process.env.ELFIN_INFERENCE_ENDPOINT
 if (INFERENCE_ENDPOINT) {
@@ -55,9 +56,39 @@ function serveStatic(path: string): Response | null {
 
 const server = Bun.serve({
   port: PORT,
+  idleTimeout: 255,
   async fetch(req) {
     const url = new URL(req.url)
     const path = url.pathname
+
+    const isKiwixPath = path === '/kiwix' || path.startsWith('/kiwix/')
+      || path.startsWith('/content/') || path.startsWith('/search')
+      || path.startsWith('/skin/') || path.startsWith('/catalog/')
+      || path.startsWith('/viewer') || path.startsWith('/random')
+    if (isKiwixPath) {
+      const kiwixPath = path.replace(/^\/kiwix\/?/, '/') || '/'
+      const targetUrl = `${KIWIX_URL}${kiwixPath}${url.search}`
+      try {
+        const proxyRes = await fetch(targetUrl, {
+          method: req.method,
+          headers: req.headers,
+          body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+          redirect: 'follow',
+          signal: AbortSignal.timeout(30_000),
+        })
+        const headers = new Headers(proxyRes.headers)
+        headers.delete('content-security-policy')
+        headers.delete('x-frame-options')
+        headers.delete('content-encoding')
+        headers.delete('content-length')
+        return new Response(proxyRes.body, {
+          status: proxyRes.status,
+          headers,
+        })
+      } catch (err: any) {
+        return Response.json({ error: 'kiwix unavailable' }, { status: 502 })
+      }
+    }
 
     // API routes
     if (path.startsWith('/api/')) {
@@ -96,15 +127,37 @@ const server = Bun.serve({
     const staticResponse = serveStatic(path)
     if (staticResponse) return staticResponse
 
-    // SPA fallback — serve index.html for all non-file routes
+    // SPA fallback — only for known Elfin frontend routes
+    const SPA_ROUTES = ['/', '/chat', '/notes', '/encyclopedia', '/login']
     const indexPath = join(STATIC_DIR, 'index.html')
-    if (existsSync(indexPath)) {
+    if (SPA_ROUTES.includes(path) && existsSync(indexPath)) {
       return new Response(Bun.file(indexPath), {
         headers: { 'Content-Type': 'text/html' },
       })
     }
 
-    return new Response('Not Found', { status: 404 })
+    // Unknown paths fall through to kiwix (handles article paths like /Painting)
+    try {
+      const kiwixFallbackUrl = `${KIWIX_URL}${path}${url.search}`
+      const proxyRes = await fetch(kiwixFallbackUrl, {
+        method: req.method,
+        headers: req.headers,
+        body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30_000),
+      })
+      const headers = new Headers(proxyRes.headers)
+      headers.delete('content-security-policy')
+      headers.delete('x-frame-options')
+      headers.delete('content-encoding')
+      headers.delete('content-length')
+      return new Response(proxyRes.body, {
+        status: proxyRes.status,
+        headers,
+      })
+    } catch {
+      return new Response('Not Found', { status: 404 })
+    }
   },
 })
 

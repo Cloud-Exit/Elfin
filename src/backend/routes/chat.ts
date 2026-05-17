@@ -259,67 +259,128 @@ async function streamMessage(
   const encoder = new TextEncoder()
   let assistantSources: any[] = []
   let assistantContent = ''
+  let savedMessageId: string | null = null
+  let pendingSave: Promise<any> = Promise.resolve()
+  let clientConnected = true
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (event: any) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
-      }
+  const saveAssistantMessage = () => {
+    pendingSave = pendingSave.then(async () => {
+      if (!assistantContent.trim()) return null
       try {
-        send({ type: 'user_message', message: userMsg })
-
-        const gen = chatService.streamReply!(message, context, historyReversed)
-        for await (const ev of gen) {
-          if (ev.type === 'sources') {
-            assistantSources = ev.sources
-            send({ type: 'sources', sources: ev.sources })
-          } else if (ev.type === 'delta') {
-            assistantContent += ev.content
-            send({ type: 'delta', content: ev.content })
-          } else if (ev.type === 'error') {
-            send({ type: 'error', message: ev.message })
-          } else if (ev.type === 'done') {
-            break
-          }
+        if (savedMessageId) {
+          const updated = await prisma.chatMessage.update({
+            where: { id: savedMessageId },
+            data: {
+              content: assistantContent.trim(),
+              sources: assistantSources.length > 0 ? JSON.stringify(assistantSources) : null,
+            },
+            select: { id: true, role: true, content: true, sources: true, images: true, createdAt: true },
+          })
+          await prisma.chatSession.update({
+            where: { id: sessionId },
+            data: { updatedAt: new Date() },
+          })
+          return updated
         }
-
         const assistantMsg = await prisma.chatMessage.create({
           data: {
             userId,
             sessionId,
             role: 'assistant',
-            content: assistantContent.trim() || '[no response]',
+            content: assistantContent.trim(),
             sources: assistantSources.length > 0 ? JSON.stringify(assistantSources) : null,
             createdAt: assistantTs,
           },
           select: { id: true, role: true, content: true, sources: true, images: true, createdAt: true },
         })
-
+        savedMessageId = assistantMsg.id
         await prisma.chatSession.update({
           where: { id: sessionId },
           data: { updatedAt: assistantTs },
         })
-
-        send({ type: 'done', message: assistantMsg })
-
-        if (historyReversed.length === 0 && chatService.inferTitle) {
-          chatService.inferTitle(message, assistantContent).then(async (title) => {
-            if (title) {
-              await prisma.chatSession.update({
-                where: { id: sessionId },
-                data: { title: title.replace(/["']/g, '') },
-              })
-            }
-          }).catch(console.error)
-        }
-      } catch (err: any) {
-        console.error('Stream error:', err)
-        try { send({ type: 'error', message: err?.message || 'stream failed' }) } catch {}
-      } finally {
-        controller.close()
+        return assistantMsg
+      } catch (err) {
+        console.error('Failed to save assistant message:', err)
+        return null
       }
+    })
+    return pendingSave
+  }
+
+  const send = (controller: ReadableStreamDefaultController, event: any) => {
+    if (!clientConnected) return
+    try {
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+    } catch {
+      clientConnected = false
+    }
+  }
+
+  // Run LLM generation to completion regardless of client connection.
+  // On a single-user RK1, a disconnect is almost always a refresh,
+  // not an intentional cancellation. Save the full response.
+  const generationDone = (async (controller: ReadableStreamDefaultController) => {
+    try {
+      send(controller, { type: 'user_message', message: userMsg })
+
+      const gen = chatService.streamReply!(message, context, historyReversed)
+      for await (const ev of gen) {
+        if (ev.type === 'sources') {
+          assistantSources = ev.sources
+          send(controller, { type: 'sources', sources: ev.sources })
+        } else if (ev.type === 'delta') {
+          assistantContent += ev.content
+          send(controller, { type: 'delta', content: ev.content })
+        } else if (ev.type === 'error') {
+          send(controller, { type: 'error', message: ev.message })
+        } else if (ev.type === 'done') {
+          break
+        }
+      }
+
+      const assistantMsg = await saveAssistantMessage()
+      if (assistantMsg) send(controller, { type: 'done', message: assistantMsg })
+
+      if (historyReversed.length === 0 && chatService.inferTitle) {
+        try {
+          const title = await chatService.inferTitle(message, assistantContent)
+          if (title) {
+            const cleanTitle = title.replace(/["']/g, '')
+            await prisma.chatSession.update({
+              where: { id: sessionId },
+              data: { title: cleanTitle },
+            })
+            send(controller, { type: 'title', title: cleanTitle, sessionId })
+          }
+        } catch (e) {
+          console.error('Title inference failed:', e)
+        }
+      }
+    } catch (err: any) {
+      console.error('Stream error:', err)
+      send(controller, { type: 'error', message: err?.message || 'stream failed' })
+    } finally {
+      await saveAssistantMessage()
+      if (clientConnected) {
+        try { controller.close() } catch {}
+      }
+    }
+  })
+
+  let resolveController: (c: ReadableStreamDefaultController) => void
+  const controllerReady = new Promise<ReadableStreamDefaultController>(r => { resolveController = r })
+
+  const stream = new ReadableStream({
+    start(controller) {
+      resolveController!(controller)
+    },
+    cancel() {
+      clientConnected = false
+      saveAssistantMessage().catch(console.error)
     },
   })
+
+  controllerReady.then(c => generationDone(c))
 
   return new Response(stream, {
     status: 200,

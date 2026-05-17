@@ -2,7 +2,7 @@ import { resolve, join, extname, basename } from 'path'
 import { existsSync, statSync } from 'fs'
 import { requireAuth } from '../auth.js'
 
-const SOURCE_DIR = resolve(process.env.ELFIN_SOURCE_DIR ?? './datasets/raw')
+const SOURCE_DIR = resolve(process.env.ELFIN_SOURCE_DIR ?? './data/datasets/raw')
 
 const MIME_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',
