@@ -31,10 +31,12 @@ async function listJournal(req: Request): Promise<Response> {
   const fromDate = url.searchParams.get('fromDate') ?? undefined
   const toDate = url.searchParams.get('toDate') ?? undefined
 
+  const dateFilter: Record<string, Date> = {}
+  if (fromDate) dateFilter.gte = new Date(fromDate)
+  if (toDate) dateFilter.lte = new Date(toDate)
   const where = {
     userId: ctx.userId,
-    ...(fromDate && { date: { gte: new Date(fromDate) } }),
-    ...(toDate && { date: { lte: new Date(toDate) } }),
+    ...(Object.keys(dateFilter).length > 0 && { date: dateFilter }),
   }
 
   const [entries, total] = await Promise.all([

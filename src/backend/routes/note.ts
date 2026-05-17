@@ -20,7 +20,7 @@ export async function handleNote(req: Request, path: string): Promise<Response |
       return Response.json({ error: err.message }, { status: 401 })
     }
     console.error('Note API Error:', err)
-    return Response.json({ error: err.message, details: err.message || err.toString() }, { status: 400 })
+    return Response.json({ error: 'internal server error' }, { status: 500 })
   }
 }
 

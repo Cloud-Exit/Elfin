@@ -203,6 +203,13 @@ export function ChatPage() {
   const abortRef = useRef<AbortController | null>(null)
   const pendingPromptRef = useRef<string | null>(null)
 
+  useEffect(() => {
+    if (!viewerUrl) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setViewerUrl(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [viewerUrl])
+
   const handleOpenSource = (filename: string, kiwixPath?: string) => {
     if (kiwixPath) {
       setViewerUrl(kiwixPath)
@@ -229,12 +236,16 @@ export function ChatPage() {
   }
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lastPollContentRef = useRef<string>('')
+  const stableCountRef = useRef(0)
 
   const stopPolling = () => {
     if (pollRef.current) {
       clearInterval(pollRef.current)
       pollRef.current = null
     }
+    lastPollContentRef.current = ''
+    stableCountRef.current = 0
   }
 
   const fetchMessages = async (sessionId: string) => {
@@ -246,7 +257,9 @@ export function ChatPage() {
         setMessages(msgs)
 
         const last = msgs[msgs.length - 1]
-        if (last && last.role === 'user' && !loading) {
+        const needsPoll = (last && last.role === 'user')
+          || (last && last.role === 'assistant' && !last.content?.trim())
+        if (needsPoll && !loading) {
           setLoading(true)
           if (!pollRef.current) {
             pollRef.current = setInterval(async () => {
@@ -258,12 +271,21 @@ export function ChatPage() {
                 const freshLast = fresh[fresh.length - 1]
                 if (freshLast && freshLast.role === 'assistant') {
                   setMessages(fresh)
-                  setLoading(false)
-                  stopPolling()
-                  fetchSessions()
+                  if (freshLast.content === lastPollContentRef.current && freshLast.content.length > 0) {
+                    stableCountRef.current++
+                  } else {
+                    stableCountRef.current = 0
+                  }
+                  lastPollContentRef.current = freshLast.content
+                  if (stableCountRef.current >= 2) {
+                    setLoading(false)
+                    stopPolling()
+                    fetchSessions()
+                    setTimeout(() => fetchSessions(), 8000)
+                  }
                 }
               } catch {}
-            }, 3000)
+            }, 2000)
           }
         } else {
           stopPolling()

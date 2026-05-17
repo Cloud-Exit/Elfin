@@ -56,7 +56,7 @@ export async function handleChat(req: Request, path: string): Promise<Response |
       return Response.json({ error: err.message }, { status: 401 })
     }
     console.error('Chat API Error:', err)
-    return Response.json({ error: 'internal server error', details: err.message || err.toString() }, { status: 500 })
+    return Response.json({ error: 'internal server error' }, { status: 500 })
   }
 }
 
@@ -265,7 +265,7 @@ async function streamMessage(
 
   const saveAssistantMessage = () => {
     pendingSave = pendingSave.then(async () => {
-      if (!assistantContent.trim()) return null
+      if (!assistantContent.trim() && assistantSources.length === 0) return null
       try {
         if (savedMessageId) {
           const updated = await prisma.chatMessage.update({

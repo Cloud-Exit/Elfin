@@ -15,6 +15,7 @@ import { prisma } from './db.js'
 const PORT = Number(process.env.ELFIN_PORT ?? 8885)
 const STATIC_DIR = resolve(process.env.STATIC_DIR ?? './static')
 const KIWIX_URL = process.env.KIWIX_URL || 'http://localhost:8083'
+const KIWIX_PORT = new URL(KIWIX_URL).port || '8083'
 
 const INFERENCE_ENDPOINT = process.env.ELFIN_INFERENCE_ENDPOINT
 if (INFERENCE_ENDPOINT) {
@@ -57,6 +58,7 @@ function serveStatic(path: string): Response | null {
 const server = Bun.serve({
   port: PORT,
   idleTimeout: 255,
+  maxRequestBodySize: 1024 * 1024,
   async fetch(req) {
     const url = new URL(req.url)
     const path = url.pathname
@@ -131,8 +133,13 @@ const server = Bun.serve({
     const SPA_ROUTES = ['/', '/chat', '/notes', '/encyclopedia', '/login']
     const indexPath = join(STATIC_DIR, 'index.html')
     if (SPA_ROUTES.includes(path) && existsSync(indexPath)) {
+      const hostname = req.headers.get('host')?.split(':')[0] ?? 'localhost'
       return new Response(Bun.file(indexPath), {
-        headers: { 'Content-Type': 'text/html' },
+        headers: {
+          'Content-Type': 'text/html',
+          'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'self'; frame-src 'self' http://${hostname}:${KIWIX_PORT}`,
+          'X-Content-Type-Options': 'nosniff',
+        },
       })
     }
 

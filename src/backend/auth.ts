@@ -2,7 +2,8 @@ import { prisma } from './db.js'
 
 export type AuthContext = { userId: string; role: string }
 
-const sessions = new Map<string, string>() // token -> userId
+const SESSION_TTL = 24 * 60 * 60 * 1000
+const sessions = new Map<string, { userId: string; expiresAt: number }>()
 
 export async function hashPassword(password: string): Promise<string> {
   return Bun.password.hash(password, { algorithm: 'bcrypt', cost: 12 })
@@ -17,11 +18,21 @@ export function createToken(): string {
 }
 
 export function setSession(token: string, userId: string): void {
-  sessions.set(token, userId)
+  sessions.set(token, { userId, expiresAt: Date.now() + SESSION_TTL })
 }
 
 export function clearSession(token: string): void {
   sessions.delete(token)
+}
+
+function getValidSession(token: string): string | null {
+  const entry = sessions.get(token)
+  if (!entry) return null
+  if (Date.now() > entry.expiresAt) {
+    sessions.delete(token)
+    return null
+  }
+  return entry.userId
 }
 
 export async function requireAuth(req: Request): Promise<AuthContext> {
@@ -29,7 +40,7 @@ export async function requireAuth(req: Request): Promise<AuthContext> {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : auth
   if (!token) throw new Error('missing token')
 
-  const userId = sessions.get(token)
+  const userId = getValidSession(token)
   if (!userId) throw new Error('invalid token')
 
   const user = await prisma.user.findUnique({ where: { id: userId } })
@@ -39,7 +50,7 @@ export async function requireAuth(req: Request): Promise<AuthContext> {
 }
 
 export async function getUserFromToken(token: string) {
-  const userId = sessions.get(token)
+  const userId = getValidSession(token)
   if (!userId) return null
   return prisma.user.findUnique({
     where: { id: userId },

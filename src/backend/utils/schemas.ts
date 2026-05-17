@@ -6,12 +6,12 @@ export const paginationSchema = z.object({
 })
 
 export const journalCreateSchema = z.object({
-  content: z.string().trim().min(1),
+  content: z.string().trim().min(1).max(50_000),
   date: z.coerce.date().optional(),
 })
 
 export const journalUpdateSchema = z.object({
-  content: z.string().trim().min(1).optional(),
+  content: z.string().trim().min(1).max(50_000).optional(),
   date: z.coerce.date().optional(),
 })
 
@@ -58,14 +58,14 @@ export const baselineQuestions: Record<BaselineCategory, string> = {
 }
 
 export const baselineFieldsSchema = z.object({
-  conditions: z.string().trim().optional(),
-  meds: z.string().trim().optional(),
-  allergies: z.string().trim().optional(),
-  fitness: z.string().trim().optional(),
-  mentalHealth: z.string().trim().optional(),
-  vision: z.string().trim().optional(),
-  chronicPain: z.string().trim().optional(),
-  diet: z.string().trim().optional(),
+  conditions: z.string().trim().max(2000).optional(),
+  meds: z.string().trim().max(2000).optional(),
+  allergies: z.string().trim().max(2000).optional(),
+  fitness: z.string().trim().max(2000).optional(),
+  mentalHealth: z.string().trim().max(2000).optional(),
+  vision: z.string().trim().max(2000).optional(),
+  chronicPain: z.string().trim().max(2000).optional(),
+  diet: z.string().trim().max(2000).optional(),
 })
 
 export type BaselineFields = z.infer<typeof baselineFieldsSchema>
@@ -114,17 +114,17 @@ export const chatSessionCreateSchema = z.object({
 
 export const chatMessageCreateSchema = z.object({
   sessionId: z.string().trim().min(1),
-  message: z.string().trim().min(1),
-  sources: z.array(z.unknown()).optional(),
+  message: z.string().trim().min(1).max(10_000),
+  sources: z.array(z.unknown()).max(20).optional(),
   images: z.array(z.string().max(4096)).max(4).optional(),
 })
 
 export const noteCreateSchema = z.object({
   title: z.string().trim().min(1).max(255),
-  content: z.string().trim().min(1),
+  content: z.string().trim().min(1).max(50_000),
 })
 
 export const noteUpdateSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
-  content: z.string().trim().min(1).optional(),
+  content: z.string().trim().min(1).max(50_000).optional(),
 })

@@ -60,6 +60,6 @@ export async function handleSources(req: Request, path: string): Promise<Respons
       return Response.json({ error: err.message }, { status: 401 })
     }
     console.error('Sources API Error:', err)
-    return Response.json({ error: err.message || 'internal error' }, { status: 500 })
+    return Response.json({ error: 'internal server error' }, { status: 500 })
   }
 }
