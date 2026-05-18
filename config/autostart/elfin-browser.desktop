@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Elfin Browser
+Exec=elfin-browser
+X-GNOME-Autostart-enabled=true
+Hidden=false
+NoDisplay=false

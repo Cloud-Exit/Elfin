@@ -99,10 +99,10 @@ export function NotesPage() {
   return (
     <>
       <PageHeader title="Notepad" />
-      <div style={{ display: 'flex', height: 'calc(100% - 60px)', gap: '1rem', marginTop: '1rem' }}>
-        
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: '1rem', marginTop: '1rem' }}>
+
         {/* Left Pane: List */}
-        <div style={{ flex: '0 0 300px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ width: '300px', minWidth: '200px', maxWidth: '300px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <input 
               type="text" 

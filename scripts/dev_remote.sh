@@ -9,6 +9,8 @@
 #
 # Optional env:
 #   ELFIN_REMOTE_PATH   remote project path (default: /home/<user>/elfin)
+#   ELFIN_DATA_PATH     remote data path (default: <ELFIN_REMOTE_PATH>/data)
+#                       Set to NVMe mount for large assets (models, ZIMs, vectors)
 #   ELFIN_REMOTE_PORT   ssh port (default: 22)
 #   TARGET              local (default) or rockchip
 #   RK1_TARGET          legacy flag, ignored if HOST/USER set
@@ -22,7 +24,8 @@ set -euo pipefail
 : "${ELFIN_REMOTE_HOST:?ELFIN_REMOTE_HOST required (e.g. rk1.local)}"
 : "${ELFIN_REMOTE_HOST_USER:?ELFIN_REMOTE_HOST_USER required (e.g. elfin)}"
 
-REMOTE_PATH="${ELFIN_REMOTE_PATH:-/home/${ELFIN_REMOTE_HOST_USER}/elfin}"
+REMOTE_PATH="${ELFIN_REMOTE_PATH:-${ELFIN_DATA_PATH:-/home/${ELFIN_REMOTE_HOST_USER}/elfin}}"
+DATA_PATH="${ELFIN_DATA_PATH:-${REMOTE_PATH}/data}"
 SSH_PORT="${ELFIN_REMOTE_PORT:-22}"
 SSH_TARGET="${ELFIN_REMOTE_HOST_USER}@${ELFIN_REMOTE_HOST}"
 
@@ -54,7 +57,8 @@ ELFIN_INFERENCE_ENDPOINT="${ELFIN_INFERENCE_ENDPOINT:-http://localhost:8081}"
 ELFIN_EMBED_ENDPOINT="${ELFIN_EMBED_ENDPOINT:-http://localhost:8082}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
 KIWIX_URL="${KIWIX_URL:-http://localhost:8083}"
-DATABASE_URL="${DATABASE_URL:-file:./data/elfin.db}"
+DATABASE_URL="${DATABASE_URL:-file:${DATA_PATH}/elfin.db}"
+ELFIN_SOURCE_DIR="${ELFIN_SOURCE_DIR:-${DATA_PATH}/datasets/raw}"
 DEMO_MODE="${DEMO_MODE:-true}"
 
 # If requested chat model is missing locally, fall back to any available Gemma 4 E4B GGUF.
@@ -71,6 +75,7 @@ ENV_FILE_LOCAL=$(mktemp)
 trap "rm -f ${ENV_FILE_LOCAL}" EXIT
 cat > "${ENV_FILE_LOCAL}" <<EOF
 TARGET=${TARGET}
+ELFIN_DATA_PATH=${DATA_PATH}
 LLAMA_IMAGE=${LLAMA_IMAGE}
 LLAMA_NGL=${LLAMA_NGL}
 LLAMA_THREADS=${LLAMA_THREADS}
@@ -85,6 +90,7 @@ ELFIN_EMBED_ENDPOINT=${ELFIN_EMBED_ENDPOINT}
 QDRANT_URL=${QDRANT_URL}
 KIWIX_URL=${KIWIX_URL}
 DATABASE_URL=${DATABASE_URL}
+ELFIN_SOURCE_DIR=${ELFIN_SOURCE_DIR}
 DEMO_MODE=${DEMO_MODE}
 EOF
 
@@ -115,10 +121,11 @@ ensure_remote_ownership() {
   ssh_run "
     set -e
     if command -v sudo >/dev/null 2>&1; then
-      sudo mkdir -p ${REMOTE_PATH}/data/models ${REMOTE_PATH}/data/datasets/zim ${REMOTE_PATH}/data/qdrant
+      sudo mkdir -p ${DATA_PATH}/models ${DATA_PATH}/datasets/zim ${DATA_PATH}/datasets/raw ${DATA_PATH}/qdrant
       sudo chown -R ${ELFIN_REMOTE_HOST_USER}:${ELFIN_REMOTE_HOST_USER} ${REMOTE_PATH}
+      sudo chown -R ${ELFIN_REMOTE_HOST_USER}:${ELFIN_REMOTE_HOST_USER} ${DATA_PATH}
     else
-      mkdir -p ${REMOTE_PATH}/data/models ${REMOTE_PATH}/data/datasets/zim ${REMOTE_PATH}/data/qdrant
+      mkdir -p ${DATA_PATH}/models ${DATA_PATH}/datasets/zim ${DATA_PATH}/datasets/raw ${DATA_PATH}/qdrant
     fi
   "
 }
@@ -139,29 +146,29 @@ sync_files() {
 }
 
 sync_runtime_assets() {
-  echo "[rk1] syncing runtime assets..."
-  ssh_run "mkdir -p ${REMOTE_PATH}/data/models ${REMOTE_PATH}/data/datasets/zim ${REMOTE_PATH}/data/datasets/raw"
-  rsync -az --delete --no-owner --no-group -e "ssh ${SSH_OPTS[*]}" ./data/models/ "${SSH_TARGET}:${REMOTE_PATH}/data/models/"
-  rsync -az --delete --no-owner --no-group -e "ssh ${SSH_OPTS[*]}" ./data/datasets/zim/ "${SSH_TARGET}:${REMOTE_PATH}/data/datasets/zim/"
-  rsync -az --delete --no-owner --no-group -e "ssh ${SSH_OPTS[*]}" ./data/datasets/raw/ "${SSH_TARGET}:${REMOTE_PATH}/data/datasets/raw/"
+  echo "[rk1] syncing runtime assets to ${DATA_PATH}..."
+  ssh_run "mkdir -p ${DATA_PATH}/models ${DATA_PATH}/datasets/zim ${DATA_PATH}/datasets/raw"
+  rsync -az --delete --no-owner --no-group -e "ssh ${SSH_OPTS[*]}" ./data/models/ "${SSH_TARGET}:${DATA_PATH}/models/"
+  rsync -az --delete --no-owner --no-group -e "ssh ${SSH_OPTS[*]}" ./data/datasets/zim/ "${SSH_TARGET}:${DATA_PATH}/datasets/zim/"
+  rsync -az --delete --no-owner --no-group -e "ssh ${SSH_OPTS[*]}" ./data/datasets/raw/ "${SSH_TARGET}:${DATA_PATH}/datasets/raw/"
 }
 
 verify_remote_runtime_assets() {
   remote_sh "
     set -euo pipefail
-    test -f ${REMOTE_PATH}/data/models/${CHAT_MODEL} || {
-      echo '[rk1] missing remote chat model:' ${REMOTE_PATH}/data/models/${CHAT_MODEL}
-      ls -lah ${REMOTE_PATH}/data/models || true
+    test -f ${DATA_PATH}/models/${CHAT_MODEL} || {
+      echo '[rk1] missing remote chat model:' ${DATA_PATH}/models/${CHAT_MODEL}
+      ls -lah ${DATA_PATH}/models || true
       exit 1
     }
-    test -f ${REMOTE_PATH}/data/models/${EMBED_MODEL} || {
-      echo '[rk1] missing remote embed model:' ${REMOTE_PATH}/data/models/${EMBED_MODEL}
-      ls -lah ${REMOTE_PATH}/data/models || true
+    test -f ${DATA_PATH}/models/${EMBED_MODEL} || {
+      echo '[rk1] missing remote embed model:' ${DATA_PATH}/models/${EMBED_MODEL}
+      ls -lah ${DATA_PATH}/models || true
       exit 1
     }
-    ls ${REMOTE_PATH}/data/datasets/zim/*.zim >/dev/null 2>&1 || {
-      echo '[rk1] missing remote ZIM assets in' ${REMOTE_PATH}/data/datasets/zim
-      ls -lah ${REMOTE_PATH}/data/datasets/zim || true
+    ls ${DATA_PATH}/datasets/zim/*.zim >/dev/null 2>&1 || {
+      echo '[rk1] missing remote ZIM assets in' ${DATA_PATH}/datasets/zim
+      ls -lah ${DATA_PATH}/datasets/zim || true
       exit 1
     }
   "
@@ -228,13 +235,16 @@ remote_wait_http() {
   echo
   echo "[rk1] timed out waiting for ${label}: ${url}"
   if [ "${TARGET}" = "rockchip" ] && [ "${label}" = "llama-server" ]; then
-    remote_sh "tail -200 ${REMOTE_PATH}/data/logs/rk-llama-server.log 2>/dev/null || true" || true
+    remote_sh "tail -200 ${DATA_PATH}/logs/rk-llama-server.log 2>/dev/null || true" || true
   fi
   exit 1
 }
 
 bootstrap() {
   echo "[rk1] target: ${SSH_TARGET}:${REMOTE_PATH}"
+  if [[ "${DATA_PATH}" != "${REMOTE_PATH}/data" ]]; then
+    echo "[rk1] data:   ${DATA_PATH}"
+  fi
   ssh_run "mkdir -p ${REMOTE_PATH}"
   ensure_remote_ownership
   validate_runtime_assets
@@ -445,7 +455,10 @@ stream_logs() {
   LOG_PID=$!
 }
 
+_cleaned_up=0
 cleanup() {
+  [[ "$_cleaned_up" -eq 1 ]] && return
+  _cleaned_up=1
   echo
   echo "[local] shutting down..."
   if [ -n "${LOG_PID:-}" ]; then kill "${LOG_PID}" 2>/dev/null || true; fi

@@ -12,7 +12,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - ./data/models:/models:ro
+      - ${ELFIN_DATA_PATH:-./data}/models:/models:ro
     environment:
       - CHAT_MODEL=${CHAT_MODEL:-gemma-4-E2B-it-IQ4_XS.gguf}
       - CHAT_CTX_SIZE=${CHAT_CTX_SIZE:-4096}
@@ -43,7 +43,7 @@ services:
     ports:
       - "8084:8084"
     volumes:
-      - ./data/models:/models:ro
+      - ${ELFIN_DATA_PATH:-./data}/models:/models:ro
     environment:
       - CHAT_MODEL=${CHAT_MODEL:-gemma-4-E2B-it-IQ4_XS.gguf}
       - CHAT_MMPROJ=${CHAT_MMPROJ:-mmproj-F16.gguf}
@@ -73,7 +73,7 @@ services:
     ports:
       - "8082:8082"
     volumes:
-      - ./data/models:/models:ro
+      - ${ELFIN_DATA_PATH:-./data}/models:/models:ro
     environment:
       - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text-v1.5.Q8_0.gguf}
       - EMBED_CTX_SIZE=${EMBED_CTX_SIZE:-2048}
@@ -102,7 +102,7 @@ services:
     ports:
       - "6333:6333"
     volumes:
-      - ./data/qdrant:/qdrant/storage
+      - ${ELFIN_DATA_PATH:-./data}/qdrant:/qdrant/storage
     environment:
       - QDRANT__STORAGE__ON_DISK_PAYLOAD=true
       - QDRANT__TELEMETRY_DISABLED=true
@@ -114,6 +114,6 @@ services:
     ports:
       - "8083:8080"
     volumes:
-      - ./data/datasets/zim:/data:ro
+      - ${ELFIN_DATA_PATH:-./data}/datasets/zim:/data:ro
     command: /data/*.zim
     restart: unless-stopped

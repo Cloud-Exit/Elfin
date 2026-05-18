@@ -75,7 +75,12 @@ async function listSessions(req: Request): Promise<Response> {
     prisma.chatSession.count({ where: { userId: ctx.userId } }),
   ])
 
-  return Response.json({ sessions, total, limit, offset })
+  return new Response(JSON.stringify({ sessions, total, limit, offset }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
+  })
 }
 
 async function createSession(req: Request): Promise<Response> {
@@ -123,7 +128,12 @@ async function listMessages(req: Request, sessionId: string): Promise<Response> 
     prisma.chatMessage.count({ where: { sessionId, userId: ctx.userId } }),
   ])
 
-  return Response.json({ messages, total, limit, offset })
+  return new Response(JSON.stringify({ messages, total, limit, offset }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
+  })
 }
 
 async function sendMessage(req: Request, sessionId: string): Promise<Response> {

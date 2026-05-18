@@ -57,45 +57,45 @@ export function LoginPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', padding: '2rem' }}>
-      <h1 style={{ fontSize: '2rem', marginBottom: '2rem', textShadow: '0 0 1rem rgba(var(--main), 0.8)' }}>Elfin OS</h1>
-      
-      <form onSubmit={handleLogin} className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%', maxWidth: '400px', padding: '2rem' }}>
-        <h2 style={{ marginBottom: '1rem', borderBottom: '1px solid rgba(var(--main), 0.2)', paddingBottom: '0.5rem', width: '100%', textAlign: 'center' }}>Authentication Required</h2>
-        
-        {error && <div style={{ color: '#f44', marginBottom: '1rem', textAlign: 'center' }}>{error}</div>}
-        
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', padding: 'clamp(1rem, 3vmin, 2rem)', overflowY: 'auto' }}>
+      <h1 style={{ fontSize: 'clamp(1.2rem, 4vmin, 2rem)', marginBottom: 'clamp(1rem, 3vmin, 2rem)', textShadow: '0 0 1rem rgba(var(--main), 0.8)' }}>Elfin OS</h1>
+
+      <form onSubmit={handleLogin} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(0.5rem, 2vmin, 1rem)', width: '100%', maxWidth: 'min(400px, 90vw)', padding: 'clamp(1rem, 3vmin, 2rem)' }}>
+        <h2 style={{ marginBottom: 'clamp(0.5rem, 2vmin, 1rem)', borderBottom: '1px solid rgba(var(--main), 0.2)', paddingBottom: '0.5rem', width: '100%', textAlign: 'center', fontSize: 'clamp(0.9rem, 2.5vmin, 1.2rem)' }}>Authentication Required</h2>
+
+        {error && <div style={{ color: '#f44', marginBottom: '0.5rem', textAlign: 'center' }}>{error}</div>}
+
         <div style={{ textAlign: 'center' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', textAlign: 'center' }}>USERNAME</label>
-          <input 
-            type="text" 
-            value={username} 
-            onChange={e => setUsername(e.target.value)} 
-            style={{ width: '100%', padding: '0.5rem', background: 'rgba(0,0,0,0.5)', color: 'rgb(var(--main))', border: '1px solid rgba(var(--main), 0.4)', fontFamily: 'inherit', textAlign: 'center' }}
+          <input
+            type="text"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            style={{ width: '100%', padding: 'clamp(0.4rem, 1.5vmin, 0.75rem)', background: 'rgba(0,0,0,0.5)', color: 'rgb(var(--main))', border: '1px solid rgba(var(--main), 0.4)', fontFamily: 'inherit', textAlign: 'center', fontSize: 'clamp(12px, 2vmin, 14px)' }}
             autoFocus
           />
         </div>
-        
+
         <div style={{ textAlign: 'center' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', textAlign: 'center' }}>PASSWORD</label>
-          <input 
-            type="password" 
-            value={password} 
-            onChange={e => setPassword(e.target.value)} 
-            style={{ width: '100%', padding: '0.5rem', background: 'rgba(0,0,0,0.5)', color: 'rgb(var(--main))', border: '1px solid rgba(var(--main), 0.4)', fontFamily: 'inherit', textAlign: 'center' }}
+          <input
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            style={{ width: '100%', padding: 'clamp(0.4rem, 1.5vmin, 0.75rem)', background: 'rgba(0,0,0,0.5)', color: 'rgb(var(--main))', border: '1px solid rgba(var(--main), 0.4)', fontFamily: 'inherit', textAlign: 'center', fontSize: 'clamp(12px, 2vmin, 14px)' }}
           />
         </div>
-        
-        <button type="submit" className="btn" style={{ marginTop: '1rem', padding: '0.75rem' }}>LOGIN</button>
+
+        <button type="submit" className="btn" style={{ marginTop: '0.5rem', padding: 'clamp(0.5rem, 1.5vmin, 0.75rem)' }}>LOGIN</button>
       </form>
-      
+
       {demoMode && (
-        <div className="card" style={{ marginTop: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: '400px', padding: '2rem' }}>
-          <h2 style={{ marginBottom: '1rem', borderBottom: '1px solid rgba(var(--main), 0.2)', paddingBottom: '0.5rem', width: '100%', textAlign: 'center' }}>Demo Mode</h2>
-          <p style={{ marginBottom: '1.5rem', textAlign: 'center', color: 'rgba(var(--main), 0.7)' }}>
+        <div className="card" style={{ marginTop: 'clamp(1rem, 3vmin, 2rem)', display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 'min(400px, 90vw)', padding: 'clamp(1rem, 3vmin, 2rem)' }}>
+          <h2 style={{ marginBottom: 'clamp(0.5rem, 2vmin, 1rem)', borderBottom: '1px solid rgba(var(--main), 0.2)', paddingBottom: '0.5rem', width: '100%', textAlign: 'center', fontSize: 'clamp(0.9rem, 2.5vmin, 1.2rem)' }}>Demo Mode</h2>
+          <p style={{ marginBottom: 'clamp(0.75rem, 2vmin, 1.5rem)', textAlign: 'center', color: 'rgba(var(--main), 0.7)', fontSize: 'clamp(11px, 1.8vmin, 13px)' }}>
             Try Elfin instantly. Demo accounts and data are automatically deleted after 24 hours.
           </p>
-          <button onClick={handleDemo} className="btn" style={{ width: '100%', padding: '0.75rem' }}>START DEMO</button>
+          <button onClick={handleDemo} className="btn" style={{ width: '100%', padding: 'clamp(0.5rem, 1.5vmin, 0.75rem)' }}>START DEMO</button>
         </div>
       )}
     </div>

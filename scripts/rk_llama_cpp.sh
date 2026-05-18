@@ -6,15 +6,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ACTION="${1:-help}"
 DRY_RUN="${DRY_RUN:-0}"
 
+ELFIN_DATA_PATH="${ELFIN_DATA_PATH:-$ROOT_DIR/data}"
+
 RK_LLAMA_CPP_REPO="${RK_LLAMA_CPP_REPO:-https://github.com/invisiofficial/rk-llama.cpp.git}"
 RK_LLAMA_CPP_BRANCH="${RK_LLAMA_CPP_BRANCH:-rknpu2}"
-RK_LLAMA_CPP_DIR="${RK_LLAMA_CPP_DIR:-$ROOT_DIR/data/toolchains/rk-llama.cpp}"
+RK_LLAMA_CPP_DIR="${RK_LLAMA_CPP_DIR:-$ELFIN_DATA_PATH/toolchains/rk-llama.cpp}"
 RK_LLAMA_CPP_BUILD_DIR="${RK_LLAMA_CPP_BUILD_DIR:-$RK_LLAMA_CPP_DIR/build}"
 RK_LLAMA_CPP_JOBS="${RK_LLAMA_CPP_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
-
 CHAT_MODEL="${CHAT_MODEL:-gemma-4-E2B-it-IQ4_XS.gguf}"
-RK_LLAMA_CPP_MODEL="${RK_LLAMA_CPP_MODEL:-$ROOT_DIR/data/models/$CHAT_MODEL}"
-RK_LLAMA_CPP_MMPROJ="${RK_LLAMA_CPP_MMPROJ:-$ROOT_DIR/data/models/${CHAT_MMPROJ:-mmproj-F16.gguf}}"
+RK_LLAMA_CPP_MODEL="${RK_LLAMA_CPP_MODEL:-$ELFIN_DATA_PATH/models/$CHAT_MODEL}"
+RK_LLAMA_CPP_MMPROJ="${RK_LLAMA_CPP_MMPROJ:-$ELFIN_DATA_PATH/models/${CHAT_MMPROJ:-mmproj-F16.gguf}}"
 RK_LLAMA_CPP_VISION="${RK_LLAMA_CPP_VISION:-0}"
 RK_LLAMA_CPP_PORT="${RK_LLAMA_CPP_PORT:-8081}"
 RK_LLAMA_CPP_HOST="${RK_LLAMA_CPP_HOST:-0.0.0.0}"
@@ -24,9 +25,10 @@ RK_LLAMA_CPP_PROMPT="${RK_LLAMA_CPP_PROMPT:-Who are you?}"
 RK_LLAMA_CPP_EXTRA_ARGS="${RK_LLAMA_CPP_EXTRA_ARGS:-}"
 RK_LLAMA_CPP_REASONING_BUDGET="${RK_LLAMA_CPP_REASONING_BUDGET:--1}"
 RK_LLAMA_CPP_CHAT_TEMPLATE="${RK_LLAMA_CPP_CHAT_TEMPLATE:-$ROOT_DIR/config/gemma4-no-think.jinja}"
-RK_LLAMA_CPP_SPEC_TYPE="${RK_LLAMA_CPP_SPEC_TYPE:-ngram-simple}"
-RK_LLAMA_CPP_DRAFT_N="${RK_LLAMA_CPP_DRAFT_N:-8}"
+RK_LLAMA_CPP_SPEC_TYPE="${RK_LLAMA_CPP_SPEC_TYPE:-none}"
+RK_LLAMA_CPP_DRAFT_N="${RK_LLAMA_CPP_DRAFT_N:-0}"
 RK_LLAMA_CPP_SERVER_EXTRA_ARGS="${RK_LLAMA_CPP_SERVER_EXTRA_ARGS:-}"
+RK_LLAMA_CPP_NGL="${RK_LLAMA_CPP_NGL:-99}"
 RK_LLAMA_CPP_BENCH_EXTRA_ARGS="${RK_LLAMA_CPP_BENCH_EXTRA_ARGS:-}"
 
 RKNPU_DEVICE="${RKNPU_DEVICE:-RK3588}"
@@ -138,12 +140,43 @@ check_rknpu2_runtime() {
     echo ""
   fi
 
-  if [[ ! -e /dev/rknpu ]]; then
-    echo "WARNING: /dev/rknpu not found. NPU kernel module not loaded."
-    echo "Fix: sudo modprobe rknpu"
-    echo "If module missing: find /lib/modules/\$(uname -r) -name 'rknpu*'"
+  if [[ -e /dev/rknpu ]]; then
+    echo "NPU device: /dev/rknpu (legacy)"
+  elif [[ -e /dev/dri/renderD129 ]]; then
+    echo "NPU device: /dev/dri/renderD129 (DRM)"
+  elif [[ -e /dev/dri/renderD128 ]]; then
+    echo "NPU device: /dev/dri/renderD128 (DRM)"
+  else
+    echo "WARNING: No NPU device found (/dev/rknpu, /dev/dri/renderD12*)."
     echo "Vendor/BSP kernel required for NPU support (mainline kernel lacks rknpu)."
   fi
+}
+
+RKNN_LIB_DIR=""
+
+install_rknn_runtime() {
+  local bundled_dir="$RK_LLAMA_CPP_DIR/ggml/src/ggml-rknpu2/libs"
+  local bundled_lib="$bundled_dir/librknnrt.so"
+
+  if ldconfig -p 2>/dev/null | grep -q 'librknnrt\.so'; then
+    echo "librknnrt.so found in system library path"
+    return 0
+  fi
+
+  if [[ ! -f "$bundled_lib" ]]; then
+    echo "WARNING: librknnrt.so not found in repo or system. NPU offload unavailable."
+    return 0
+  fi
+
+  echo "Installing bundled librknnrt.so to /usr/lib/..."
+  if sudo cp "$bundled_lib" /usr/lib/librknnrt.so 2>/dev/null && sudo ldconfig 2>/dev/null; then
+    echo "librknnrt.so installed to /usr/lib/"
+    return 0
+  fi
+
+  echo "sudo failed, using bundled lib via LD_LIBRARY_PATH"
+  RKNN_LIB_DIR="$bundled_dir"
+  export LD_LIBRARY_PATH="${bundled_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 }
 
 ensure_build() {
@@ -154,19 +187,25 @@ ensure_build() {
   require_cmd cmake
   require_cmd make
   ensure_checkout
+  install_rknn_runtime
   check_rknpu2_runtime
 
   mkdir -p "$RK_LLAMA_CPP_BUILD_DIR"
-  run cmake -S "$RK_LLAMA_CPP_DIR" -B "$RK_LLAMA_CPP_BUILD_DIR" -DLLAMA_RKNPU2=ON
+  local -a cmake_args=(
+    -S "$RK_LLAMA_CPP_DIR"
+    -B "$RK_LLAMA_CPP_BUILD_DIR"
+    -DLLAMA_RKNPU2=ON
+  )
+  if [[ -n "$RKNN_LIB_DIR" ]]; then
+    cmake_args+=(-DCMAKE_LIBRARY_PATH="$RKNN_LIB_DIR")
+    cmake_args+=(-DCMAKE_BUILD_RPATH="$RKNN_LIB_DIR")
+    cmake_args+=(-DCMAKE_INSTALL_RPATH="$RKNN_LIB_DIR")
+  fi
+  run cmake "${cmake_args[@]}"
   run cmake --build "$RK_LLAMA_CPP_BUILD_DIR" --parallel "$RK_LLAMA_CPP_JOBS"
 
   if [[ "$DRY_RUN" != "1" ]] && [[ -f "$RK_LLAMA_CPP_BUILD_DIR/bin/llama-server" ]]; then
-    if ldd "$RK_LLAMA_CPP_BUILD_DIR/bin/llama-server" 2>/dev/null | grep -q rknn; then
-      echo "Build linked against RKNN: NPU offload enabled"
-    else
-      echo "WARNING: built binary does NOT link RKNN. NPU offload will NOT work."
-      echo "Check cmake output above for RKNPU2 detection errors."
-    fi
+    echo "Build complete: $RK_LLAMA_CPP_BUILD_DIR/bin/llama-server"
   fi
 }
 
@@ -182,11 +221,11 @@ assert_model() {
 }
 
 pid_file() {
-  printf '%s\n' "$ROOT_DIR/data/logs/rk-llama-server.pid"
+  printf '%s\n' "$ELFIN_DATA_PATH/logs/rk-llama-server.pid"
 }
 
 log_file() {
-  printf '%s\n' "$ROOT_DIR/data/logs/rk-llama-server.log"
+  printf '%s\n' "$ELFIN_DATA_PATH/logs/rk-llama-server.log"
 }
 
 stop_server() {
@@ -229,6 +268,11 @@ run_with_rknpu_env() {
   [[ -n "$RKNPU_CORES" ]] && env_args+=("RKNPU_CORES=$RKNPU_CORES")
   [[ -n "$RKNPU_DOMAINS" ]] && env_args+=("RKNPU_DOMAINS=$RKNPU_DOMAINS")
 
+  local bundled_dir="$RK_LLAMA_CPP_DIR/ggml/src/ggml-rknpu2/libs"
+  if [[ -d "$bundled_dir" ]]; then
+    env_args+=("LD_LIBRARY_PATH=${bundled_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
+  fi
+
   ulimit -n 65536 2>/dev/null || true
   run env "${env_args[@]}" "$@"
 }
@@ -246,11 +290,14 @@ server() {
     -c "$RK_LLAMA_CPP_CTX_SIZE"
     --threads "$RK_LLAMA_CPP_THREADS"
     --reasoning-budget "$RK_LLAMA_CPP_REASONING_BUDGET"
+    -np 1
     --jinja
     --chat-template-file "$RK_LLAMA_CPP_CHAT_TEMPLATE"
-    --spec-type "$RK_LLAMA_CPP_SPEC_TYPE"
-    --draft "$RK_LLAMA_CPP_DRAFT_N"
   )
+
+  if [[ "$RK_LLAMA_CPP_SPEC_TYPE" != "none" ]] && [[ -n "$RK_LLAMA_CPP_SPEC_TYPE" ]]; then
+    args+=(--spec-type "$RK_LLAMA_CPP_SPEC_TYPE" --draft "$RK_LLAMA_CPP_DRAFT_N")
+  fi
 
   if [[ "$RK_LLAMA_CPP_VISION" == "1" ]] && [[ -s "$RK_LLAMA_CPP_MMPROJ" ]]; then
     args+=(--mmproj "$RK_LLAMA_CPP_MMPROJ")
@@ -268,7 +315,7 @@ server_bg() {
 
   ensure_build
   assert_model
-  mkdir -p "$ROOT_DIR/data/logs"
+  mkdir -p "$ELFIN_DATA_PATH/logs"
   pid_path="$(pid_file)"
   log_path="$(log_file)"
 
@@ -282,11 +329,14 @@ server_bg() {
     -c "$RK_LLAMA_CPP_CTX_SIZE"
     --threads "$RK_LLAMA_CPP_THREADS"
     --reasoning-budget "$RK_LLAMA_CPP_REASONING_BUDGET"
+    -np 1
     --jinja
     --chat-template-file "$RK_LLAMA_CPP_CHAT_TEMPLATE"
-    --spec-type "$RK_LLAMA_CPP_SPEC_TYPE"
-    --draft "$RK_LLAMA_CPP_DRAFT_N"
   )
+
+  if [[ "$RK_LLAMA_CPP_SPEC_TYPE" != "none" ]] && [[ -n "$RK_LLAMA_CPP_SPEC_TYPE" ]]; then
+    args+=(--spec-type "$RK_LLAMA_CPP_SPEC_TYPE" --draft "$RK_LLAMA_CPP_DRAFT_N")
+  fi
 
   if [[ "$RK_LLAMA_CPP_VISION" == "1" ]] && [[ -s "$RK_LLAMA_CPP_MMPROJ" ]]; then
     args+=(--mmproj "$RK_LLAMA_CPP_MMPROJ")
@@ -353,17 +403,18 @@ verify() {
   echo ""
   echo "=== NPU Device ==="
   if [[ -e /dev/rknpu ]]; then
-    echo "Found: /dev/rknpu"
+    echo "Found: /dev/rknpu (legacy)"
     ls -la /dev/rknpu
-  else
-    echo "NOT found: /dev/rknpu"
   fi
-
   if [[ -d /dev/dri ]]; then
-    echo "Found: /dev/dri"
+    echo "DRM devices:"
     ls -la /dev/dri/
-  else
-    echo "NOT found: /dev/dri"
+    if dmesg 2>/dev/null | grep -qi 'rknpu.*initialized'; then
+      echo "RKNPU DRM driver: LOADED (confirmed via dmesg)"
+    fi
+  fi
+  if [[ ! -e /dev/rknpu ]] && [[ ! -e /dev/dri/renderD128 ]]; then
+    echo "WARNING: No NPU device found"
   fi
 
   echo ""

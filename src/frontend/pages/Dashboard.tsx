@@ -80,7 +80,7 @@ export function DashboardPage() {
     <>
       <PageHeader title="Status" />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard label="Indexed Chunks" value={data?.documents ?? '...'} sub="in Qdrant" />
         <StatCard label="Chat Sessions" value={data?.chatSessions ?? '...'} />
         <StatCard label="Notes" value={data?.notes ?? '...'} />

@@ -77,7 +77,7 @@ define start_rag_services
 	fi
 endef
 
-.PHONY: help ensure-venv dev dev-local dev-remote build build-frontend dev-frontend typecheck setup setup-python setup-training clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-remote ingest-remote-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat vision debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run finetune-dataset finetune-generate finetune-validate finetune-train finetune-train-validate finetune-smoke finetune-export finetune-eval db-generate db-push db-migrate db-studio db-seed
+.PHONY: help ensure-venv dev dev-local dev-remote install-remote build build-frontend dev-frontend typecheck setup setup-python setup-training clean services download-assets download-assets-dry-run dataset-inventory ingest ingest-force ingest-remote ingest-remote-force ingest-plan ingest-validate train-validate test test-contracts test-install-prep verify-gemma4 smoke-gemma4 smoke-ingestion-live chat vision debug-kiwix verify-slice1 verify-slice1-config verify-slice1-assets verify-slice1-live verify-slice2 verify-slice3 evals-validate evals-dry-run finetune-dataset finetune-generate finetune-validate finetune-train finetune-train-validate finetune-smoke finetune-export finetune-eval db-generate db-push db-migrate db-studio db-seed
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -113,6 +113,94 @@ dev-remote: ## Sync project to RK1 via SSH, run target stack, watch local files 
 		exit 1; \
 	fi
 	bash scripts/dev_remote.sh
+
+install-remote: build-frontend ## Build, sync, generate .env, install systemd services + browser autostart on remote
+	@if [ -z "$$ELFIN_REMOTE_HOST" ] || [ -z "$$ELFIN_REMOTE_HOST_USER" ]; then \
+		echo "ERROR: ELFIN_REMOTE_HOST and ELFIN_REMOTE_HOST_USER required"; \
+		exit 1; \
+	fi
+	@REMOTE_PATH="$${ELFIN_REMOTE_PATH:-$${ELFIN_DATA_PATH:-/home/$$ELFIN_REMOTE_HOST_USER/elfin}}"; \
+	DATA_PATH="$${ELFIN_DATA_PATH:-$$REMOTE_PATH/data}"; \
+	TARGET="$${TARGET:-rockchip}"; \
+	SSH_PORT="$${ELFIN_REMOTE_PORT:-22}"; \
+	SSH_TARGET="$$ELFIN_REMOTE_HOST_USER@$$ELFIN_REMOTE_HOST"; \
+	SSH_OPTS="-p $$SSH_PORT -o StrictHostKeyChecking=accept-new"; \
+	CHAT_MODEL="$${CHAT_MODEL:-gemma-4-E2B-it-IQ4_XS.gguf}"; \
+	CHAT_MMPROJ="$${CHAT_MMPROJ:-mmproj-F16.gguf}"; \
+	EMBED_MODEL="$${EMBED_MODEL:-nomic-embed-text-v1.5.Q8_0.gguf}"; \
+	CHAT_CTX_SIZE="$${CHAT_CTX_SIZE:-4096}"; \
+	ELFIN_PORT="$${ELFIN_PORT:-8885}"; \
+	DEMO_MODE="$${DEMO_MODE:-true}"; \
+	echo "[install] syncing project to $$SSH_TARGET:$$REMOTE_PATH..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET "mkdir -p $$REMOTE_PATH"; \
+	rsync -az --delete --no-owner --no-group \
+		-e "ssh $$SSH_OPTS" \
+		--exclude=.git/ \
+		--exclude=node_modules/ \
+		--exclude=.venv/ \
+		--exclude=__pycache__/ \
+		--exclude=data/ \
+		--exclude=datasets/ \
+		--exclude=artifacts/ \
+		--exclude='*.pyc' \
+		--exclude=.DS_Store \
+		--exclude=.env \
+		./ "$$SSH_TARGET:$$REMOTE_PATH/"; \
+	echo "[install] generating .env (TARGET=$$TARGET, MODEL=$$CHAT_MODEL)..."; \
+	ENV_TMP=$$(mktemp); \
+	printf '%s\n' \
+		"TARGET=$$TARGET" \
+		"ELFIN_DATA_PATH=$$DATA_PATH" \
+		"LLAMA_IMAGE=$${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}" \
+		"LLAMA_NGL=$${LLAMA_NGL:-0}" \
+		"LLAMA_THREADS=$${LLAMA_THREADS:-4}" \
+		"LLAMA_CPU_MASK=$${LLAMA_CPU_MASK:-0xF0}" \
+		"CHAT_MODEL=$$CHAT_MODEL" \
+		"CHAT_MMPROJ=$$CHAT_MMPROJ" \
+		"EMBED_MODEL=$$EMBED_MODEL" \
+		"CHAT_CTX_SIZE=$$CHAT_CTX_SIZE" \
+		"ELFIN_PORT=$$ELFIN_PORT" \
+		"ELFIN_INFERENCE_ENDPOINT=$${ELFIN_INFERENCE_ENDPOINT:-http://localhost:8081}" \
+		"ELFIN_EMBED_ENDPOINT=$${ELFIN_EMBED_ENDPOINT:-http://localhost:8082}" \
+		"QDRANT_URL=$${QDRANT_URL:-http://localhost:6333}" \
+		"KIWIX_URL=$${KIWIX_URL:-http://localhost:8083}" \
+		"DATABASE_URL=$${DATABASE_URL:-file:$$DATA_PATH/elfin.db}" \
+		"ELFIN_SOURCE_DIR=$${ELFIN_SOURCE_DIR:-$$DATA_PATH/datasets/raw}" \
+		"DEMO_MODE=$$DEMO_MODE" \
+		> "$$ENV_TMP"; \
+	ssh $$SSH_OPTS $$SSH_TARGET "cat > $$REMOTE_PATH/.env" < "$$ENV_TMP"; \
+	rm -f "$$ENV_TMP"; \
+	echo "[install] generating systemd units for $$SSH_TARGET ($$REMOTE_PATH)..."; \
+	ssh $$SSH_OPTS $$SSH_TARGET " \
+		set -e; \
+		BUN_PATH=\$$(command -v bun || echo \$$HOME/.bun/bin/bun); \
+		sed -e \"s|__USER__|$$ELFIN_REMOTE_HOST_USER|g\" \
+		    -e \"s|__ELFIN_DIR__|$$REMOTE_PATH|g\" \
+		    -e \"s|__BUN_PATH__|\$$BUN_PATH|g\" \
+		    $$REMOTE_PATH/config/systemd/elfin.service.tpl \
+		    | sudo tee /etc/systemd/system/elfin.service >/dev/null; \
+		sudo systemctl daemon-reload; \
+		sudo systemctl disable rk-llama 2>/dev/null || true; \
+		sudo systemctl enable elfin 2>/dev/null || true; \
+		echo '[install] systemd services installed and enabled'; \
+		chmod +x $$REMOTE_PATH/scripts/elfin-browser.sh; \
+		mkdir -p \$$HOME/.local/bin \$$HOME/.config/autostart; \
+		ln -sf $$REMOTE_PATH/scripts/elfin-browser.sh \$$HOME/.local/bin/elfin-browser; \
+		cp $$REMOTE_PATH/config/autostart/elfin-browser.desktop \$$HOME/.config/autostart/; \
+		echo '[install] browser autostart installed'; \
+		echo '[install] running bun install + prisma db push...'; \
+		export BUN_INSTALL=\"\$$HOME/.bun\"; \
+		export PATH=\"\$$BUN_INSTALL/bin:\$$PATH\"; \
+		cd $$REMOTE_PATH && bun install --frozen-lockfile 2>/dev/null || bun install && \
+		bunx prisma db push --accept-data-loss && \
+		echo '[install] database ready'; \
+		if [ \"$$TARGET\" = 'rockchip' ]; then \
+			echo '[install] building rk-llama.cpp...'; \
+			cd $$REMOTE_PATH && sg render -c 'bash scripts/rk_llama_cpp.sh build' 2>&1; \
+		fi; \
+		sudo systemctl restart elfin 2>/dev/null || true; \
+		echo '[install] elfin service restarted'; \
+	"
 
 services: ## Start target services only
 	$(call start_rag_services)

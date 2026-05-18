@@ -333,8 +333,8 @@ export function ChatPage() {
   }, [])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    messagesEndRef.current?.scrollIntoView({ behavior: loading ? 'instant' : 'smooth' })
+  }, [messages, loading])
 
   const handleNewChat = async () => {
     try {
@@ -493,10 +493,10 @@ export function ChatPage() {
   return (
     <>
       <PageHeader title="AI Chat" />
-      <div style={{ display: 'flex', height: 'calc(100% - 60px)', gap: '1rem', marginTop: '1rem' }}>
-        
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: '1rem', marginTop: '1rem' }}>
+
         {/* Left Pane: Chat Sessions List */}
-        <div style={{ flex: '0 0 250px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ width: '250px', minWidth: '180px', maxWidth: '250px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <button className="btn" onClick={handleNewChat} style={{ padding: '0.75rem' }}>+ NEW CHAT</button>
           
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -566,7 +566,7 @@ export function ChatPage() {
                   key={m.id} 
                   style={{
                     alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                    maxWidth: '80%',
+                    maxWidth: m.role === 'user' ? '80%' : '95%',
                     background: m.role === 'user' ? 'rgba(var(--main), 0.15)' : 'rgba(var(--alt), 0.1)',
                     border: `1px solid ${m.role === 'user' ? 'rgba(var(--main), 0.3)' : 'rgba(var(--alt), 0.4)'}`,
                     padding: '1rem',
@@ -576,13 +576,10 @@ export function ChatPage() {
                   <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: m.role === 'user' ? 'rgb(var(--main))' : 'rgb(var(--alt))' }}>
                     {m.role === 'user' ? 'YOU' : 'ELFIN'}
                   </div>
-                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                    {m.role === 'assistant' ? renderWithCitations(m.content, handleOpenSource) : m.content}
-                  </div>
                   {m.sources && (
-                    <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(var(--alt), 0.3)', paddingTop: '0.5rem' }}>
+                    <div style={{ marginBottom: '0.75rem', borderBottom: '1px solid rgba(var(--alt), 0.3)', paddingBottom: '0.5rem' }}>
                       <div style={{ fontSize: '0.8em', color: 'rgba(var(--alt), 0.8)', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                        SOURCES RETRIEVED:
+                        SOURCES:
                       </div>
                       {(() => {
                         try {
@@ -635,6 +632,9 @@ export function ChatPage() {
                       })()}
                     </div>
                   )}
+                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                    {m.role === 'assistant' ? renderWithCitations(m.content, handleOpenSource) : m.content}
+                  </div>
                 </div>
               ))
             )}
