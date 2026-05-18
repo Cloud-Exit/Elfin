@@ -20,12 +20,23 @@ model User {
   createdAt         DateTime @default(now())
   baseline          String?  // JSON stringified health baseline interview data
 
+  sessions       Session[]
   journalEntries JournalEntry[]
   checkIns       CheckIn[]
   notes          Note[]
   photos         Photo[]
   chatSessions   ChatSession[]
   chatMessages   ChatMessage[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model JournalEntry {

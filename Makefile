@@ -120,7 +120,7 @@ install-remote: build-frontend ## Build, sync, generate .env, install systemd se
 		exit 1; \
 	fi
 	@REMOTE_PATH="$${ELFIN_REMOTE_PATH:-$${ELFIN_DATA_PATH:-/home/$$ELFIN_REMOTE_HOST_USER/elfin}}"; \
-	DATA_PATH="$${ELFIN_DATA_PATH:-$$REMOTE_PATH/data}"; \
+	DATA_PATH="$${ELFIN_DATA_PATH:-$$REMOTE_PATH}"; \
 	TARGET="$${TARGET:-rockchip}"; \
 	SSH_PORT="$${ELFIN_REMOTE_PORT:-22}"; \
 	SSH_TARGET="$$ELFIN_REMOTE_HOST_USER@$$ELFIN_REMOTE_HOST"; \
@@ -133,43 +133,44 @@ install-remote: build-frontend ## Build, sync, generate .env, install systemd se
 	DEMO_MODE="$${DEMO_MODE:-true}"; \
 	echo "[install] syncing project to $$SSH_TARGET:$$REMOTE_PATH..."; \
 	ssh $$SSH_OPTS $$SSH_TARGET "mkdir -p $$REMOTE_PATH"; \
-	rsync -az --delete --no-owner --no-group \
+	rsync -az --progress --no-owner --no-group \
 		-e "ssh $$SSH_OPTS" \
 		--exclude=.git/ \
 		--exclude=node_modules/ \
 		--exclude=.venv/ \
 		--exclude=__pycache__/ \
-		--exclude=data/ \
-		--exclude=datasets/ \
-		--exclude=artifacts/ \
 		--exclude='*.pyc' \
 		--exclude=.DS_Store \
 		--exclude=.env \
 		./ "$$SSH_TARGET:$$REMOTE_PATH/"; \
-	echo "[install] generating .env (TARGET=$$TARGET, MODEL=$$CHAT_MODEL)..."; \
-	ENV_TMP=$$(mktemp); \
-	printf '%s\n' \
-		"TARGET=$$TARGET" \
-		"ELFIN_DATA_PATH=$$DATA_PATH" \
-		"LLAMA_IMAGE=$${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}" \
-		"LLAMA_NGL=$${LLAMA_NGL:-0}" \
-		"LLAMA_THREADS=$${LLAMA_THREADS:-4}" \
-		"LLAMA_CPU_MASK=$${LLAMA_CPU_MASK:-0xF0}" \
-		"CHAT_MODEL=$$CHAT_MODEL" \
-		"CHAT_MMPROJ=$$CHAT_MMPROJ" \
-		"EMBED_MODEL=$$EMBED_MODEL" \
-		"CHAT_CTX_SIZE=$$CHAT_CTX_SIZE" \
-		"ELFIN_PORT=$$ELFIN_PORT" \
-		"ELFIN_INFERENCE_ENDPOINT=$${ELFIN_INFERENCE_ENDPOINT:-http://localhost:8081}" \
-		"ELFIN_EMBED_ENDPOINT=$${ELFIN_EMBED_ENDPOINT:-http://localhost:8082}" \
-		"QDRANT_URL=$${QDRANT_URL:-http://localhost:6333}" \
-		"KIWIX_URL=$${KIWIX_URL:-http://localhost:8083}" \
-		"DATABASE_URL=$${DATABASE_URL:-file:$$DATA_PATH/elfin.db}" \
-		"ELFIN_SOURCE_DIR=$${ELFIN_SOURCE_DIR:-$$DATA_PATH/datasets/raw}" \
-		"DEMO_MODE=$$DEMO_MODE" \
-		> "$$ENV_TMP"; \
-	ssh $$SSH_OPTS $$SSH_TARGET "cat > $$REMOTE_PATH/.env" < "$$ENV_TMP"; \
-	rm -f "$$ENV_TMP"; \
+	if ssh $$SSH_OPTS $$SSH_TARGET "test -f $$REMOTE_PATH/.env"; then \
+		echo "[install] .env already exists on remote, skipping (edit manually on remote)"; \
+	else \
+		echo "[install] generating .env (TARGET=$$TARGET, MODEL=$$CHAT_MODEL)..."; \
+		ENV_TMP=$$(mktemp); \
+		printf '%s\n' \
+			"TARGET=$$TARGET" \
+			"ELFIN_DATA_PATH=$$DATA_PATH" \
+			"LLAMA_IMAGE=$${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}" \
+			"LLAMA_NGL=$${LLAMA_NGL:-0}" \
+			"LLAMA_THREADS=$${LLAMA_THREADS:-6}" \
+			"CHAT_MODEL=$$CHAT_MODEL" \
+			"CHAT_MMPROJ=$$CHAT_MMPROJ" \
+			"RK_LLAMA_CPP_VISION=$${RK_LLAMA_CPP_VISION:-1}" \
+			"EMBED_MODEL=$$EMBED_MODEL" \
+			"CHAT_CTX_SIZE=$$CHAT_CTX_SIZE" \
+			"ELFIN_PORT=$$ELFIN_PORT" \
+			"ELFIN_INFERENCE_ENDPOINT=$${ELFIN_INFERENCE_ENDPOINT:-http://localhost:8081}" \
+			"ELFIN_EMBED_ENDPOINT=$${ELFIN_EMBED_ENDPOINT:-http://localhost:8082}" \
+			"QDRANT_URL=$${QDRANT_URL:-http://localhost:6333}" \
+			"KIWIX_URL=$${KIWIX_URL:-http://localhost:8083}" \
+			"DATABASE_URL=$${DATABASE_URL:-file:$$DATA_PATH/elfin.db}" \
+			"ELFIN_SOURCE_DIR=$${ELFIN_SOURCE_DIR:-$$DATA_PATH/datasets/raw}" \
+			"DEMO_MODE=$$DEMO_MODE" \
+			> "$$ENV_TMP"; \
+		ssh $$SSH_OPTS $$SSH_TARGET "cat > $$REMOTE_PATH/.env" < "$$ENV_TMP"; \
+		rm -f "$$ENV_TMP"; \
+	fi; \
 	echo "[install] generating systemd units for $$SSH_TARGET ($$REMOTE_PATH)..."; \
 	ssh $$SSH_OPTS $$SSH_TARGET " \
 		set -e; \
@@ -195,8 +196,12 @@ install-remote: build-frontend ## Build, sync, generate .env, install systemd se
 		bunx prisma db push --accept-data-loss && \
 		echo '[install] database ready'; \
 		if [ \"$$TARGET\" = 'rockchip' ]; then \
-			echo '[install] building rk-llama.cpp...'; \
-			cd $$REMOTE_PATH && sg render -c 'bash scripts/rk_llama_cpp.sh build' 2>&1; \
+			if [ -f $$DATA_PATH/toolchains/rk-llama.cpp/build/bin/llama-server ]; then \
+				echo '[install] rk-llama.cpp binary exists, skipping build'; \
+			else \
+				echo '[install] building rk-llama.cpp...'; \
+				cd $$REMOTE_PATH && sg render -c 'bash scripts/rk_llama_cpp.sh build' 2>&1; \
+			fi; \
 		fi; \
 		sudo systemctl restart elfin 2>/dev/null || true; \
 		echo '[install] elfin service restarted'; \

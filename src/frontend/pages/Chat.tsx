@@ -32,12 +32,11 @@ function renderWithCitations(text: string, onOpenSource?: (filename: string) => 
           onOpenSource?.(filename)
         }}
         style={{
-          color: '#66ffcc',
+          color: 'var(--link-color)',
           textDecoration: 'underline',
           textDecorationThickness: '2px',
           fontWeight: 'bold',
           cursor: 'pointer',
-          textShadow: '0 0 4px rgba(102, 255, 204, 0.6)',
           padding: '0 2px',
         }}
         title={`Open ${filename}`}
@@ -77,13 +76,64 @@ const SAMPLE_PROMPTS = [
   'Someone is showing signs of heat stroke',
 ]
 
+const MAX_IMAGE_ATTACHMENTS = 2
+const MAX_IMAGE_DIMENSION = 1024
+const MAX_IMAGE_DATA_URL_LENGTH = 2_000_000
+
+function parseMessageImages(images: any): string[] {
+  if (!images) return []
+  try {
+    const parsed = typeof images === 'string' ? JSON.parse(images) : images
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'))
+  } catch {
+    return []
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('failed to read image'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function compressImage(file: File): Promise<string> {
+  const raw = await readFileAsDataUrl(file)
+  const image = new Image()
+  image.src = raw
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve()
+    image.onerror = () => reject(new Error('failed to decode image'))
+  })
+
+  const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(image.width, image.height))
+  const width = Math.max(1, Math.round(image.width * scale))
+  const height = Math.max(1, Math.round(image.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('failed to prepare image')
+  ctx.drawImage(image, 0, 0, width, height)
+  const compressed = canvas.toDataURL('image/jpeg', 0.78)
+  if (compressed.length > MAX_IMAGE_DATA_URL_LENGTH) {
+    throw new Error('image is too large after compression')
+  }
+  return compressed
+}
+
 function EmptyChatState({
   hasSessions,
   onNewChat,
+  onAttachImage,
   onSamplePrompt,
 }: {
   hasSessions: boolean
   onNewChat: () => void
+  onAttachImage: () => void
   onSamplePrompt: (prompt: string) => void
 }) {
   return (
@@ -103,8 +153,8 @@ function EmptyChatState({
           padding: '2.5rem 2rem',
           border: '1px solid rgba(var(--main), 0.28)',
           background:
-            'linear-gradient(180deg, rgba(var(--alt), 0.2) 0%, rgba(0, 0, 0, 0.42) 100%)',
-          boxShadow: 'inset 0 0 0 1px rgba(var(--main), 0.08), 0 0 2rem rgba(var(--alt), 0.12)',
+            'linear-gradient(180deg, rgba(var(--alt), 0.12) 0%, rgba(var(--alt), 0.04) 100%)',
+          boxShadow: 'inset 0 0 0 1px rgba(var(--main), 0.08)',
           textAlign: 'center',
         }}
       >
@@ -158,7 +208,7 @@ function EmptyChatState({
               key={prompt}
               onClick={() => onSamplePrompt(prompt)}
               style={{
-                background: 'rgba(0,0,0,0.4)',
+                background: 'var(--source-bg)',
                 border: '1px solid rgba(var(--main), 0.2)',
                 color: 'rgba(var(--main), 0.8)',
                 padding: '0.75rem 1rem',
@@ -182,10 +232,82 @@ function EmptyChatState({
           ))}
         </div>
 
-        <button className="btn" onClick={onNewChat} style={{ padding: '0.95rem 1.6rem', minWidth: '15rem' }}>
-          + START NEW CHAT
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+          <button className="btn" onClick={onNewChat} style={{ padding: '0.95rem 1.6rem', minWidth: '15rem' }}>
+            + START NEW CHAT
+          </button>
+          <button
+            className="btn"
+            onClick={onAttachImage}
+            style={{
+              padding: '0.95rem 1.6rem',
+              minWidth: '15rem',
+              borderColor: 'rgba(var(--alt), 0.8)',
+              color: 'rgb(var(--alt))',
+            }}
+          >
+            + ATTACH IMAGE
+          </button>
+        </div>
       </div>
+    </div>
+  )
+}
+
+function SamplePromptGrid({
+  onAttachImage,
+  onSamplePrompt,
+}: {
+  onAttachImage: () => void
+  onSamplePrompt: (prompt: string) => void
+}) {
+  return (
+    <div style={{ margin: 'auto', width: 'min(100%, 40rem)', textAlign: 'center' }}>
+        <div style={{ color: 'rgba(var(--main), 0.5)', marginBottom: '1rem', fontSize: '0.88rem', letterSpacing: '0.18rem', textTransform: 'uppercase' }}>
+        Try a prompt, type your own below, or attach an image
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem', textAlign: 'left' }}>
+        {SAMPLE_PROMPTS.map((prompt) => (
+          <button
+            key={prompt}
+            onClick={() => onSamplePrompt(prompt)}
+            style={{
+              background: 'var(--source-bg)',
+              border: '1px solid rgba(var(--main), 0.2)',
+              color: 'rgba(var(--main), 0.8)',
+              padding: '0.75rem 1rem',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              fontSize: '0.88rem',
+              lineHeight: 1.4,
+              transition: 'border-color 0.15s, color 0.15s',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.borderColor = 'rgba(var(--alt), 0.6)'
+              e.currentTarget.style.color = 'rgb(var(--alt))'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.borderColor = 'rgba(var(--main), 0.2)'
+              e.currentTarget.style.color = 'rgba(var(--main), 0.8)'
+            }}
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
+      <button
+        className="btn"
+        onClick={onAttachImage}
+        style={{
+          marginTop: '1.25rem',
+          padding: '0.9rem 1.4rem',
+          minWidth: '16rem',
+          borderColor: 'rgba(var(--alt), 0.8)',
+          color: 'rgb(var(--alt))',
+        }}
+      >
+        + ATTACH IMAGE
+      </button>
     </div>
   )
 }
@@ -198,8 +320,11 @@ export function ChatPage() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const [viewerTitle, setViewerTitle] = useState('')
+  const [selectedImages, setSelectedImages] = useState<string[]>([])
+  const [imageError, setImageError] = useState('')
   const abortRef = useRef<AbortController | null>(null)
   const pendingPromptRef = useRef<string | null>(null)
 
@@ -302,6 +427,10 @@ export function ChatPage() {
   }, [])
 
   useEffect(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    stopPolling()
+    setLoading(false)
     if (selectedSessionId) {
       fetchMessages(selectedSessionId).then(() => {
         if (pendingPromptRef.current) {
@@ -336,7 +465,7 @@ export function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: loading ? 'instant' : 'smooth' })
   }, [messages, loading])
 
-  const handleNewChat = async () => {
+  const createChatSession = async (): Promise<string | null> => {
     try {
       const res = await fetchWithAuth('/api/chat/sessions', {
         method: 'POST',
@@ -347,10 +476,26 @@ export function ChatPage() {
         const data = await res.json()
         setSessions([data.session, ...sessions])
         setSelectedSessionId(data.session.id)
+        return data.session.id
       }
     } catch (err) {
       console.error('Failed to create new chat', err)
     }
+    return null
+  }
+
+  const handleNewChat = async () => {
+    await createChatSession()
+  }
+
+  const handleAttachImage = async () => {
+    if (!selectedSessionId) {
+      const id = await createChatSession()
+      if (!id) return
+      window.setTimeout(() => fileInputRef.current?.click(), 0)
+      return
+    }
+    fileInputRef.current?.click()
   }
 
   const handleDeleteSession = async (e: React.MouseEvent, id: string) => {
@@ -390,19 +535,48 @@ export function ChatPage() {
     }
   }
 
+  const handleImageFiles = async (files: FileList | null) => {
+    setImageError('')
+    if (!files || files.length === 0) return
+    const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'))
+    const slots = MAX_IMAGE_ATTACHMENTS - selectedImages.length
+    if (slots <= 0) {
+      setImageError(`Only ${MAX_IMAGE_ATTACHMENTS} images can be attached.`)
+      return
+    }
+
+    try {
+      const compressed: string[] = []
+      for (const file of imageFiles.slice(0, slots)) {
+        compressed.push(await compressImage(file))
+      }
+      if (compressed.length === 0) {
+        setImageError('Choose a PNG, JPG, or WebP image.')
+        return
+      }
+      setSelectedImages(prev => [...prev, ...compressed].slice(0, MAX_IMAGE_ATTACHMENTS))
+    } catch (err: any) {
+      setImageError(err?.message || 'Could not attach image.')
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   const handleSend = async (e?: React.FormEvent, directMessage?: string) => {
     e?.preventDefault()
-    const userMessageContent = directMessage || input.trim()
-    if (!userMessageContent || loading || !selectedSessionId) return
+    const outgoingImages = directMessage ? [] : selectedImages
+    const userMessageContent = directMessage || input.trim() || (outgoingImages.length > 0 ? 'Analyze this image for survival-relevant details.' : '')
+    if ((!userMessageContent && outgoingImages.length === 0) || loading || !selectedSessionId) return
 
     setInput('')
+    if (!directMessage) setSelectedImages([])
     setLoading(true)
 
     const tempUserId = `tmp-u-${Date.now()}`
     const tempAssistantId = `tmp-a-${Date.now()}`
     setMessages(prev => [
       ...prev,
-      { id: tempUserId, role: 'user', content: userMessageContent, createdAt: new Date().toISOString() },
+      { id: tempUserId, role: 'user', content: userMessageContent, images: outgoingImages.length > 0 ? outgoingImages : null, createdAt: new Date().toISOString() },
       { id: tempAssistantId, role: 'assistant', content: '', createdAt: new Date(Date.now() + 1).toISOString() },
     ])
 
@@ -422,7 +596,11 @@ export function ChatPage() {
           'Accept': 'text/event-stream',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ sessionId: selectedSessionId, message: userMessageContent }),
+        body: JSON.stringify({
+          sessionId: selectedSessionId,
+          message: userMessageContent,
+          images: outgoingImages.length > 0 ? outgoingImages : undefined,
+        }),
         signal: controller.signal,
       })
 
@@ -543,23 +721,17 @@ export function ChatPage() {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div className="card" style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {!selectedSessionId ? (
-              <EmptyChatState hasSessions={sessions.length > 0} onNewChat={handleNewChat} onSamplePrompt={handleSamplePrompt} />
+              <EmptyChatState
+                hasSessions={sessions.length > 0}
+                onNewChat={handleNewChat}
+                onAttachImage={handleAttachImage}
+                onSamplePrompt={handleSamplePrompt}
+              />
             ) : messages.length === 0 ? (
-              <div
-                className="placeholder"
-                style={{
-                  margin: 'auto',
-                  textAlign: 'center',
-                  minHeight: '12rem',
-                  flexDirection: 'column',
-                  gap: '0.75rem',
-                }}
-              >
-                <div style={{ color: 'rgba(var(--main), 0.5)' }}>New chat ready.</div>
-                <div style={{ color: 'rgba(var(--main), 0.3)', fontSize: '0.88rem', letterSpacing: '0.18rem' }}>
-                  Ask Elfin something to begin.
-                </div>
-              </div>
+              <SamplePromptGrid
+                onAttachImage={handleAttachImage}
+                onSamplePrompt={(prompt) => handleSend(undefined, prompt)}
+              />
             ) : (
               messages.map(m => (
                 <div 
@@ -567,7 +739,7 @@ export function ChatPage() {
                   style={{
                     alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
                     maxWidth: m.role === 'user' ? '80%' : '95%',
-                    background: m.role === 'user' ? 'rgba(var(--main), 0.15)' : 'rgba(var(--alt), 0.1)',
+                    background: m.role === 'user' ? 'var(--msg-user)' : 'var(--msg-assistant)',
                     border: `1px solid ${m.role === 'user' ? 'rgba(var(--main), 0.3)' : 'rgba(var(--alt), 0.4)'}`,
                     padding: '1rem',
                     borderRadius: '4px'
@@ -576,6 +748,24 @@ export function ChatPage() {
                   <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: m.role === 'user' ? 'rgb(var(--main))' : 'rgb(var(--alt))' }}>
                     {m.role === 'user' ? 'YOU' : 'ELFIN'}
                   </div>
+                  {parseMessageImages(m.images).length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                      {parseMessageImages(m.images).map((image, idx) => (
+                        <img
+                          key={`${m.id}-image-${idx}`}
+                          src={image}
+                          alt={`Attached image ${idx + 1}`}
+                          style={{
+                            width: '9rem',
+                            maxHeight: '7rem',
+                            objectFit: 'cover',
+                            border: '1px solid rgba(var(--alt), 0.45)',
+                            background: '#050805',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                   {m.sources && (
                     <div style={{ marginBottom: '0.75rem', borderBottom: '1px solid rgba(var(--alt), 0.3)', paddingBottom: '0.5rem' }}>
                       <div style={{ fontSize: '0.8em', color: 'rgba(var(--alt), 0.8)', marginBottom: '0.5rem', fontWeight: 'bold' }}>
@@ -596,11 +786,11 @@ export function ChatPage() {
                               <div key={idx} style={{
                                 fontSize: '0.85em',
                                 color: 'rgba(var(--main), 0.7)',
-                                background: 'rgba(0,0,0,0.3)',
+                                background: 'var(--source-bg)',
                                 padding: '0.5rem',
                                 borderRadius: '4px',
                                 marginBottom: '0.5rem',
-                                borderLeft: `2px solid ${isKiwix ? '#4da6ff' : 'rgb(var(--alt))'}`
+                                borderLeft: `2px solid ${isKiwix ? 'var(--link-kiwix)' : 'var(--source-border)'}`
                               }}>
                                 <div style={{ fontWeight: 'bold', color: isKiwix ? '#4da6ff' : 'rgb(var(--alt))', marginBottom: '0.25rem' }}>
                                   {isOpenable ? (
@@ -610,7 +800,7 @@ export function ChatPage() {
                                         e.preventDefault()
                                         handleOpenSource(displayLabel, src.kiwixPath)
                                       }}
-                                      style={{ color: isKiwix ? '#4da6ff' : '#66ffcc', textDecoration: 'underline', textDecorationThickness: '2px', cursor: 'pointer', textShadow: `0 0 4px ${isKiwix ? 'rgba(77, 166, 255, 0.6)' : 'rgba(102, 255, 204, 0.6)'}` }}
+                                      style={{ color: isKiwix ? 'var(--link-kiwix)' : 'var(--link-color)', textDecoration: 'underline', textDecorationThickness: '2px', cursor: 'pointer' }}
                                       title={`Open ${displayLabel}`}
                                     >
                                       {isKiwix ? `[Wiki: ${displayLabel}]` : `[${fullSource}]`}
@@ -647,26 +837,98 @@ export function ChatPage() {
           </div>
 
           {/* Input Area */}
-          <form onSubmit={handleSend} style={{ display: 'flex', gap: '0.5rem' }}>
-            <input
-              type="text"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              placeholder={selectedSessionId ? "Ask Elfin something..." : "Select a chat first..."}
-              disabled={loading || !selectedSessionId}
-              style={{ 
-                flex: 1, 
-                padding: '1rem', 
-                background: 'rgba(0,0,0,0.5)', 
-                color: 'rgb(var(--main))', 
-                border: '1px solid rgba(var(--main), 0.4)',
-                fontFamily: 'inherit',
-                fontSize: '1.1em'
-              }}
-            />
-            <button type="submit" className="btn" disabled={loading || !input.trim() || !selectedSessionId} style={{ padding: '0 2rem' }}>
-              SEND
-            </button>
+          <form onSubmit={handleSend} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {(selectedImages.length > 0 || imageError) && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                flexWrap: 'wrap',
+                padding: '0.65rem',
+                border: '1px solid rgba(var(--main), 0.22)',
+                background: 'rgba(var(--alt), 0.06)',
+              }}>
+                {selectedImages.map((image, idx) => (
+                  <div key={`selected-${idx}`} style={{ position: 'relative' }}>
+                    <img
+                      src={image}
+                      alt={`Selected image ${idx + 1}`}
+                      style={{
+                        width: '5.5rem',
+                        height: '4.2rem',
+                        objectFit: 'cover',
+                        border: '1px solid rgba(var(--alt), 0.45)',
+                        background: '#050805',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setSelectedImages(prev => prev.filter((_, i) => i !== idx))}
+                      style={{
+                        position: 'absolute',
+                        top: '-0.45rem',
+                        right: '-0.45rem',
+                        width: '1.3rem',
+                        height: '1.3rem',
+                        border: '1px solid rgba(255, 68, 68, 0.65)',
+                        background: '#210707',
+                        color: '#ff7777',
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                      }}
+                      aria-label="Remove image"
+                    >
+                      x
+                    </button>
+                  </div>
+                ))}
+                {imageError && <span style={{ color: '#ff7777', fontSize: '0.86rem' }}>{imageError}</span>}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                multiple
+                onChange={e => handleImageFiles(e.target.files)}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                className="btn"
+                disabled={loading || !selectedSessionId || selectedImages.length >= MAX_IMAGE_ATTACHMENTS}
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  padding: '0 1rem',
+                  minWidth: '10.5rem',
+                  borderColor: 'rgba(var(--alt), 0.75)',
+                  color: 'rgb(var(--alt))',
+                }}
+                title="Attach image for Gemma vision"
+              >
+                + ATTACH IMAGE
+              </button>
+              <input
+                type="text"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                placeholder={selectedSessionId ? "Ask Elfin something..." : "Select a chat first..."}
+                disabled={loading || !selectedSessionId}
+                style={{
+                  flex: 1,
+                  padding: '1rem',
+                  background: 'var(--msg-assistant)',
+                  color: 'rgb(var(--main))',
+                  border: '1px solid rgba(var(--main), 0.4)',
+                  fontFamily: 'inherit',
+                  fontSize: '1.1em'
+                }}
+              />
+              <button type="submit" className="btn" disabled={loading || (!input.trim() && selectedImages.length === 0) || !selectedSessionId} style={{ padding: '0 2rem' }}>
+                SEND
+              </button>
+            </div>
           </form>
         </div>
       </div>
@@ -674,7 +936,7 @@ export function ChatPage() {
       {viewerUrl && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ width: '90%', height: '85%', display: 'flex', flexDirection: 'column', border: '1px solid rgba(var(--main), 0.4)', background: '#111' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderBottom: '1px solid rgba(var(--main), 0.3)', background: 'rgba(0,0,0,0.6)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderBottom: '1px solid rgba(var(--main), 0.3)', background: 'var(--bg)' }}>
               <span style={{ color: 'rgb(var(--alt))', fontWeight: 'bold', fontSize: '0.9rem' }}>{viewerTitle}</span>
               <button onClick={() => setViewerUrl(null)} style={{ background: 'transparent', border: '1px solid rgba(var(--main), 0.4)', color: 'rgb(var(--main))', padding: '0.25rem 0.75rem', cursor: 'pointer' }}>CLOSE</button>
             </div>

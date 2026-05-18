@@ -3,6 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Source .env if present (systemd uses EnvironmentFile, manual runs need this)
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  . "$ROOT_DIR/.env"
+  set +a
+fi
+
 ACTION="${1:-help}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -16,11 +23,11 @@ RK_LLAMA_CPP_JOBS="${RK_LLAMA_CPP_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null 
 CHAT_MODEL="${CHAT_MODEL:-gemma-4-E2B-it-IQ4_XS.gguf}"
 RK_LLAMA_CPP_MODEL="${RK_LLAMA_CPP_MODEL:-$ELFIN_DATA_PATH/models/$CHAT_MODEL}"
 RK_LLAMA_CPP_MMPROJ="${RK_LLAMA_CPP_MMPROJ:-$ELFIN_DATA_PATH/models/${CHAT_MMPROJ:-mmproj-F16.gguf}}"
-RK_LLAMA_CPP_VISION="${RK_LLAMA_CPP_VISION:-0}"
+RK_LLAMA_CPP_VISION="${RK_LLAMA_CPP_VISION:-1}"
 RK_LLAMA_CPP_PORT="${RK_LLAMA_CPP_PORT:-8081}"
 RK_LLAMA_CPP_HOST="${RK_LLAMA_CPP_HOST:-0.0.0.0}"
 RK_LLAMA_CPP_CTX_SIZE="${RK_LLAMA_CPP_CTX_SIZE:-4096}"
-RK_LLAMA_CPP_THREADS="${RK_LLAMA_CPP_THREADS:-4}"
+RK_LLAMA_CPP_THREADS="${RK_LLAMA_CPP_THREADS:-${LLAMA_THREADS:-4}}"
 RK_LLAMA_CPP_PROMPT="${RK_LLAMA_CPP_PROMPT:-Who are you?}"
 RK_LLAMA_CPP_EXTRA_ARGS="${RK_LLAMA_CPP_EXTRA_ARGS:-}"
 RK_LLAMA_CPP_REASONING_BUDGET="${RK_LLAMA_CPP_REASONING_BUDGET:--1}"
@@ -28,7 +35,7 @@ RK_LLAMA_CPP_CHAT_TEMPLATE="${RK_LLAMA_CPP_CHAT_TEMPLATE:-$ROOT_DIR/config/gemma
 RK_LLAMA_CPP_SPEC_TYPE="${RK_LLAMA_CPP_SPEC_TYPE:-none}"
 RK_LLAMA_CPP_DRAFT_N="${RK_LLAMA_CPP_DRAFT_N:-0}"
 RK_LLAMA_CPP_SERVER_EXTRA_ARGS="${RK_LLAMA_CPP_SERVER_EXTRA_ARGS:-}"
-RK_LLAMA_CPP_NGL="${RK_LLAMA_CPP_NGL:-99}"
+RK_LLAMA_CPP_NGL="${RK_LLAMA_CPP_NGL:-${LLAMA_NGL:-99}}"
 RK_LLAMA_CPP_BENCH_EXTRA_ARGS="${RK_LLAMA_CPP_BENCH_EXTRA_ARGS:-}"
 
 RKNPU_DEVICE="${RKNPU_DEVICE:-RK3588}"
@@ -300,7 +307,10 @@ server() {
   fi
 
   if [[ "$RK_LLAMA_CPP_VISION" == "1" ]] && [[ -s "$RK_LLAMA_CPP_MMPROJ" ]]; then
+    echo "Vision enabled with mmproj: $RK_LLAMA_CPP_MMPROJ"
     args+=(--mmproj "$RK_LLAMA_CPP_MMPROJ")
+  elif [[ "$RK_LLAMA_CPP_VISION" == "1" ]]; then
+    echo "WARNING: RK_LLAMA_CPP_VISION=1 but mmproj missing: $RK_LLAMA_CPP_MMPROJ"
   fi
 
   # shellcheck disable=SC2206
@@ -339,7 +349,10 @@ server_bg() {
   fi
 
   if [[ "$RK_LLAMA_CPP_VISION" == "1" ]] && [[ -s "$RK_LLAMA_CPP_MMPROJ" ]]; then
+    echo "Vision enabled with mmproj: $RK_LLAMA_CPP_MMPROJ"
     args+=(--mmproj "$RK_LLAMA_CPP_MMPROJ")
+  elif [[ "$RK_LLAMA_CPP_VISION" == "1" ]]; then
+    echo "WARNING: RK_LLAMA_CPP_VISION=1 but mmproj missing: $RK_LLAMA_CPP_MMPROJ"
   fi
 
   # shellcheck disable=SC2206

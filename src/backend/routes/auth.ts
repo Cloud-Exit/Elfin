@@ -59,7 +59,7 @@ async function login(req: Request): Promise<Response> {
 
   loginAttempts.delete(key)
   const token = createToken()
-  setSession(token, user.id)
+  await setSession(token, user.id)
 
   return Response.json({
     token,
@@ -87,7 +87,7 @@ function trackFailedLogin(key: string, now: number): void {
 async function logout(req: Request): Promise<Response> {
   const auth = req.headers.get('authorization') ?? ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : auth
-  if (token) clearSession(token)
+  if (token) await clearSession(token)
   return Response.json({ ok: true })
 }
 
@@ -175,7 +175,7 @@ async function startDemo(req: Request): Promise<Response> {
   })
 
   const token = createToken()
-  setSession(token, user.id)
+  await setSession(token, user.id)
 
   return Response.json({
     token,

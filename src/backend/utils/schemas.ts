@@ -116,7 +116,7 @@ export const chatMessageCreateSchema = z.object({
   sessionId: z.string().trim().min(1),
   message: z.string().trim().min(1).max(10_000),
   sources: z.array(z.unknown()).max(20).optional(),
-  images: z.array(z.string().max(4096)).max(4).optional(),
+  images: z.array(z.string().startsWith('data:image/').max(2_000_000)).max(2).optional(),
 })
 
 export const noteCreateSchema = z.object({

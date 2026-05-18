@@ -177,7 +177,7 @@ async function sendMessage(req: Request, sessionId: string): Promise<Response> {
 
   let reply: { content: string }
   try {
-    reply = await chatService.generateReply(message, context, historyReversed)
+    reply = await chatService.generateReply(message, context, historyReversed, images)
   } catch (err: any) {
     reply = { content: `Sorry, I encountered an error processing your request: ${err.message || 'unknown error'}` }
   }
@@ -333,7 +333,7 @@ async function streamMessage(
     try {
       send(controller, { type: 'user_message', message: userMsg })
 
-      const gen = chatService.streamReply!(message, context, historyReversed)
+      const gen = chatService.streamReply!(message, context, historyReversed, images)
       for await (const ev of gen) {
         if (ev.type === 'sources') {
           assistantSources = ev.sources

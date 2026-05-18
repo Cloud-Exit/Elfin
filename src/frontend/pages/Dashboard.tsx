@@ -56,16 +56,16 @@ export function DashboardPage() {
         fetchWithAuth('/api/notes?limit=1').then(async r => {
           if (r.ok) { const d = await r.json(); results.notes = d.total || 0 }
         }).catch(() => {}),
-        fetch('http://localhost:8081/health').then(r => { if (r.ok) results.llmStatus = 'ok' }).catch(() => {}),
-        fetch('http://localhost:6333/collections/elfin_docs').then(async r => {
+        fetchWithAuth('/api/status').then(async r => {
           if (r.ok) {
             const d = await r.json()
-            results.qdrantStatus = 'ok'
-            results.documents = d.result?.points_count || 0
+            results.llmStatus = d.llm === 'ok' ? 'ok' : 'err'
+            results.embedStatus = d.embed === 'ok' ? 'ok' : 'err'
+            results.qdrantStatus = d.qdrant === 'ok' ? 'ok' : 'err'
+            results.kiwixStatus = d.kiwix === 'ok' ? 'ok' : 'err'
+            results.documents = d.documents || 0
           }
         }).catch(() => {}),
-        fetch('http://localhost:8083/catalog/v2/root.xml').then(r => { if (r.ok) results.kiwixStatus = 'ok' }).catch(() => {}),
-        fetch('http://localhost:8082/health').then(r => { if (r.ok) results.embedStatus = 'ok' }).catch(() => {}),
       ]
 
       await Promise.allSettled(checks)

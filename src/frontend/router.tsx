@@ -4,6 +4,7 @@ import { DashboardPage } from './pages/Dashboard'
 import { ChatPage } from './pages/Chat'
 import { NotesPage } from './pages/Notes'
 import { EncyclopediaPage } from './pages/Encyclopedia'
+import { SystemPage } from './pages/System'
 
 // TODO: parked for post-hackathon
 // import { JournalPage } from './pages/Journal'
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
       { path: 'chat', element: <ChatPage /> },
       { path: 'notes', element: <NotesPage /> },
       { path: 'encyclopedia', element: <EncyclopediaPage /> },
+      { path: 'system', element: <SystemPage /> },
     ],
   },
 ])

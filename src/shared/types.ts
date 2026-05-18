@@ -3,6 +3,7 @@ export type RouteId =
   | 'chat'
   | 'notes'
   | 'encyclopedia'
+  | 'system'
 
 // TODO: parked for post-hackathon
 // | 'journal'
@@ -22,4 +23,5 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'chat', label: 'AI Chat', path: '/chat' },
   { id: 'notes', label: 'Notepad', path: '/notes' },
   { id: 'encyclopedia', label: 'Encyclopedia', path: '/encyclopedia' },
+  { id: 'system', label: 'System', path: '/system' },
 ]

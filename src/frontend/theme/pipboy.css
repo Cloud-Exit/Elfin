@@ -18,6 +18,25 @@
   --bg: #0c0a07;
   --surface: #14110d;
   --radius: 0px;
+  --msg-user: rgba(255, 170, 60, 0.15);
+  --msg-assistant: rgba(120, 75, 20, 0.1);
+  --source-bg: rgba(0, 0, 0, 0.3);
+  --source-border: rgb(120, 75, 20);
+  --link-color: #66ffcc;
+  --link-kiwix: #4da6ff;
+}
+
+[data-theme="light"] {
+  --main: 30, 45, 65;
+  --alt: 60, 85, 120;
+  --bg: #f0ece7;
+  --surface: #ffffff;
+  --msg-user: rgba(30, 45, 65, 0.08);
+  --msg-assistant: rgba(60, 85, 120, 0.06);
+  --source-bg: rgba(60, 85, 120, 0.08);
+  --source-border: rgba(60, 85, 120, 0.3);
+  --link-color: #1a6b4a;
+  --link-kiwix: #1a5a8a;
 }
 
 ::selection {
@@ -26,7 +45,7 @@
 }
 
 body {
-  background: black;
+  background: var(--bg);
   color: rgb(var(--main));
   font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   font-size: clamp(11px, 1.6vmin, 14px);
@@ -382,6 +401,64 @@ textarea::placeholder {
   .main-content {
     padding: 12px;
   }
+}
+
+[data-theme="light"] .crt-scanlines,
+[data-theme="light"] .crt-glow {
+  display: none;
+}
+
+[data-theme="light"] .main-content {
+  text-shadow: none;
+}
+
+[data-theme="light"] .sidebar {
+  background: #e4e0db;
+  border-right-color: rgba(30, 45, 65, 0.15);
+}
+
+[data-theme="light"] .sidebar-logo {
+  text-shadow: none;
+}
+
+[data-theme="light"] .nav-link.active {
+  text-shadow: none;
+  background: rgba(30, 45, 65, 0.1);
+}
+
+[data-theme="light"] .card {
+  background: var(--surface);
+  border-color: rgba(30, 45, 65, 0.15);
+}
+
+[data-theme="light"] .btn {
+  border-color: rgba(30, 45, 65, 0.4);
+}
+
+[data-theme="light"] .btn:hover {
+  background: rgba(30, 45, 65, 0.08);
+}
+
+[data-theme="light"] input[type="text"],
+[data-theme="light"] input[type="password"],
+[data-theme="light"] textarea {
+  background: var(--surface);
+  border-color: rgba(30, 45, 65, 0.25);
+  text-shadow: none;
+}
+
+[data-theme="light"] input:focus,
+[data-theme="light"] textarea:focus {
+  border-color: rgb(30, 45, 65);
+  background: #fff;
+}
+
+[data-theme="light"] .stat-bar-fill {
+  box-shadow: none;
+}
+
+[data-theme="light"] .info-row {
+  border-bottom-color: rgba(30, 45, 65, 0.1);
 }
 
 @media (max-height: 600px) {

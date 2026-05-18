@@ -130,11 +130,13 @@ export interface AIChatService {
     message: string,
     context: ChatContext,
     history: Array<{ role: string; content: string }>,
+    images?: string[],
   ): Promise<{ content: string; sources?: any[] }>
   streamReply?(
     message: string,
     context: ChatContext,
     history: Array<{ role: string; content: string }>,
+    images?: string[],
   ): AsyncGenerator<StreamEvent, void, unknown>
   inferTitle?(userMessage: string, aiResponse: string): Promise<string | null>
 }
@@ -144,6 +146,7 @@ export class DeterministicChatService implements AIChatService {
     message: string,
     context: ChatContext,
     _history: Array<{ role: string; content: string }>,
+    _images?: string[],
   ): Promise<{ content: string; sources?: any[] }> {
     let reply = 'I received your message. '
 
@@ -194,6 +197,7 @@ Rules:
 - After steps: warning signs that mean the situation is getting worse.
 - No disclaimers ("I am not a doctor"), no "call 911", no thinking steps.
 - Cite retrieved sources using their EXACT filename: [actual_filename.pdf#chunk_N].
+- If the user attaches an image, analyze only visible details. Say what you can see, what it may imply, and what source-backed steps to take. Do not claim certainty about medical diagnoses, plants, animals, or chemicals from the image alone.
 - 8-15 steps typical. Be thorough.\n\n`
 
     if (context.baseline && Object.keys(context.baseline).length > 0) {
@@ -244,16 +248,17 @@ Rules:
     message: string,
     history: Array<{ role: string; content: string }>,
     temperature: number = 0.4,
+    images: string[] = [],
   ): Promise<string | null> {
     try {
-      const messages: Array<{ role: string; content: string }> = [
+      const messages: Array<{ role: string; content: any }> = [
         { role: 'system', content: systemPrompt },
       ]
 
       for (const turn of history.slice(-4)) {
         messages.push(turn)
       }
-      messages.push({ role: 'user', content: message })
+      messages.push({ role: 'user', content: buildUserContent(message, images) })
 
       const res = await fetch(`${this.inferenceEndpoint}/v1/chat/completions`, {
         method: 'POST',
@@ -336,12 +341,13 @@ Rules:
     systemPrompt: string,
     message: string,
     history: Array<{ role: string; content: string }>,
+    images: string[] = [],
   ): AsyncGenerator<string, void, unknown> {
-    const messages: Array<{ role: string; content: string }> = [
+    const messages: Array<{ role: string; content: any }> = [
       { role: 'system', content: systemPrompt },
     ]
     for (const turn of history.slice(-4)) messages.push(turn)
-    messages.push({ role: 'user', content: message })
+    messages.push({ role: 'user', content: buildUserContent(message, images) })
 
     const res = await fetch(`${this.inferenceEndpoint}/v1/chat/completions`, {
       method: 'POST',
@@ -394,6 +400,7 @@ Rules:
     message: string,
     context: ChatContext,
     history: Array<{ role: string; content: string }>,
+    images: string[] = [],
   ): AsyncGenerator<StreamEvent, void, unknown> {
     const systemPrompt = this.buildSystemPrompt(context)
     const { sources, retrievedContext } = await this.retrieve(message)
@@ -401,7 +408,7 @@ Rules:
     const augmented = this.buildAugmentedMessage(message, sources, retrievedContext)
 
     try {
-      for await (const delta of this.streamLlama(systemPrompt, augmented, history)) {
+      for await (const delta of this.streamLlama(systemPrompt, augmented, history, images)) {
         yield { type: 'delta', content: delta }
       }
       yield { type: 'done' }
@@ -417,16 +424,29 @@ Rules:
     message: string,
     context: ChatContext,
     history: Array<{ role: string; content: string }>,
+    images: string[] = [],
   ): Promise<{ content: string; sources?: any[] }> {
     const systemPrompt = this.buildSystemPrompt(context)
     const { sources, retrievedContext } = await this.retrieve(message)
     const augmentedMessage = this.buildAugmentedMessage(message, sources, retrievedContext)
-    const response = await this.callLlama(systemPrompt, augmentedMessage, history)
+    const response = await this.callLlama(systemPrompt, augmentedMessage, history, 0.4, images)
     if (response) {
       return { content: response.trim(), sources }
     }
-    return this.fallback.generateReply(message, context, history)
+    return this.fallback.generateReply(message, context, history, images)
   }
+}
+
+function buildUserContent(message: string, images: string[] = []): any {
+  const cleanImages = images.filter((image) => image.startsWith('data:image/')).slice(0, 2)
+  if (cleanImages.length === 0) return message
+  return [
+    { type: 'text', text: message },
+    ...cleanImages.map((image) => ({
+      type: 'image_url',
+      image_url: { url: image },
+    })),
+  ]
 }
 
 export let chatService: AIChatService = new DeterministicChatService()
