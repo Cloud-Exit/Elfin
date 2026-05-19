@@ -1,4 +1,5 @@
 # Elfin OS: Your Offline Survival AI
+<img width="1600" height="800" alt="image" src="https://github.com/user-attachments/assets/62a16dcf-f2f8-4218-b576-303c2f442203" />
 
 Built for the [Gemma 4 Good Hackathon](https://www.kaggle.com/competitions/gemma-4-good-hackathon).
 
