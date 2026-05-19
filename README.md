@@ -205,4 +205,4 @@ make ingest-remote-force    # re-embed everything
 
 ## License
 
-Proprietary. Cloud Exit B.V. 2026.
+MIT
